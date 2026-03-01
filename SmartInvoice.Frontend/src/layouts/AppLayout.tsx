@@ -20,7 +20,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { authService } from '@/services/auth';
+import { useAuth } from '@/contexts/AuthContext';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
@@ -29,24 +29,7 @@ const AppLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState<any>(null);
-
-  React.useEffect(() => {
-    // Load initial user state
-    const localUser = localStorage.getItem('user');
-    if (localUser) {
-      setUser(JSON.parse(localUser));
-    }
-
-    // Listen to profile updates (from Profile.tsx dispatch)
-    const handleStorageChange = () => {
-      const updatedUser = localStorage.getItem('user');
-      if (updatedUser) setUser(JSON.parse(updatedUser));
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+  const { user, logout } = useAuth();
 
   const menuItems = [{ key: '/app/dashboard', icon: <DashboardOutlined />, label: 'Tổng quan' },
   { key: '/app/invoices', icon: <FileTextOutlined />, label: 'Hóa đơn' },
@@ -71,9 +54,9 @@ const AppLayout: React.FC = () => {
     { key: 'logout', icon: <LogoutOutlined />, label: 'Đăng xuất', danger: true },
   ];
 
-  const handleUserMenuClick = ({ key }: { key: string }) => {
+  const handleUserMenuClick = async ({ key }: { key: string }) => {
     if (key === 'logout') {
-      authService.logout();
+      await logout();
       navigate('/login');
     } else if (key === 'profile') {
       navigate('/app/profile');

@@ -7,11 +7,13 @@ const { Title, Text, Paragraph } = Typography;
 
 import { message, Modal } from 'antd';
 import { authService, LoginRequest } from '@/services/auth';
+import { useAuth } from '@/contexts/AuthContext';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = React.useState(false);
   const [passwordForm] = Form.useForm();
+  const { login } = useAuth();
 
   // New Password Challenge State
   const [showNewPasswordModal, setShowNewPasswordModal] = React.useState(false);
@@ -21,7 +23,7 @@ const Login: React.FC = () => {
   const onFinish = async (values: LoginRequest) => {
     try {
       setLoading(true);
-      const data = await authService.login(values);
+      const data = await login(values);
 
       if (data.challengeName === 'NEW_PASSWORD_REQUIRED' && data.session) {
         setChallengeSession(data.session);
@@ -30,9 +32,6 @@ const Login: React.FC = () => {
         return; // Stop here, wait for new password
       }
 
-      localStorage.setItem('token', data.accessToken);
-      localStorage.setItem('idToken', data.idToken);
-      localStorage.setItem('user', JSON.stringify(data.user));
       message.success('Đăng nhập thành công!');
       navigate('/app/dashboard');
     } catch (error: any) {
@@ -54,6 +53,9 @@ const Login: React.FC = () => {
       localStorage.setItem('token', data.accessToken);
       localStorage.setItem('idToken', data.idToken);
       localStorage.setItem('user', JSON.stringify(data.user));
+      // Triggers checkAuth indirectly or you could expose checkAuth from useAuth
+      window.dispatchEvent(new Event('storage'));
+
       message.success('Đổi mật khẩu và đăng nhập thành công!');
       setShowNewPasswordModal(false);
       navigate('/app/dashboard');
