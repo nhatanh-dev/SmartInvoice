@@ -136,7 +136,12 @@ builder.Services.AddCors(options =>
         });
 });
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Dòng này giúp bỏ qua lỗi vòng lặp (Cycle) khi 2 bảng trỏ qua lại
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+    });
 // Swagger để test API
 builder.Services.AddSwaggerGen(c =>
 {
