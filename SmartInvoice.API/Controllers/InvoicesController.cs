@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.IO;
+using System.Security.Claims;
+using Microsoft.EntityFrameworkCore;
 using SmartInvoice.API.Data;
 using SmartInvoice.API.DTOs;
 using SmartInvoice.API.DTOs.Invoice;
 using SmartInvoice.API.Entities;
+using SmartInvoice.API.Entities.JsonModels;
 using SmartInvoice.API.Services;
 using SmartInvoice.API.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -23,15 +26,17 @@ namespace SmartInvoice.API.Controller
     public class InvoicesController : ControllerBase
     {
         private readonly StorageService _storageService;
-        private readonly AppDbContext _context;
         private readonly IInvoiceProcessorService _invoiceProcessor;
         private readonly IInvoiceService _invoiceService;
 
         [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+<<<<<<< Updated upstream
         public InvoicesController(StorageService storageService, AppDbContext context, IInvoiceProcessorService invoiceProcessor, IInvoiceService invoiceService)
+=======
+        public InvoicesController(StorageService storageService, IInvoiceProcessorService invoiceProcessor, IInvoiceService invoiceService)
+>>>>>>> Stashed changes
         {
             _storageService = storageService;
-            _context = context;
             _invoiceProcessor = invoiceProcessor;
             _invoiceService = invoiceService;
         }
@@ -55,60 +60,24 @@ namespace SmartInvoice.API.Controller
                 return BadRequest(new { Message = "S3Key is required." });
             }
 
-            string tempFilePath = null;
             try
             {
-                // 1. Tải file từ S3 về máy chủ tạm
-                tempFilePath = await _storageService.DownloadToTempFileAsync(request.S3Key);
+                var userIdStr = User.FindFirst("UserId")?.Value;
+                var companyIdStr = User.FindFirst("CompanyId")?.Value;
 
-                // 2. Validate cấu trúc XSD
-                var structResult = _invoiceProcessor.ValidateStructure(tempFilePath);
-
-                // 3. Verify Chữ ký số
-                var sigResult = _invoiceProcessor.VerifyDigitalSignature(tempFilePath);
-
-                // 4. Validate Logic & Business (VietQR...)
-                var logicResult = await _invoiceProcessor.ValidateBusinessLogicAsync(tempFilePath);
-
-                // 5. Gộp tất cả các lỗi và cảnh báo lại thành một kết quả duy nhất
-                var finalResult = new ValidationResultDto
+                if (string.IsNullOrEmpty(userIdStr) || string.IsNullOrEmpty(companyIdStr))
                 {
-                    SignerSubject = sigResult.SignerSubject,
-                    Errors = new List<string>(),
-                    Warnings = new List<string>()
-                };
-
-                if (structResult.Errors != null) finalResult.Errors.AddRange(structResult.Errors);
-                if (sigResult.Errors != null) finalResult.Errors.AddRange(sigResult.Errors);
-                if (logicResult.Errors != null) finalResult.Errors.AddRange(logicResult.Errors);
-
-                if (structResult.Warnings != null) finalResult.Warnings.AddRange(structResult.Warnings);
-                if (sigResult.Warnings != null) finalResult.Warnings.AddRange(sigResult.Warnings);
-                if (logicResult.Warnings != null) finalResult.Warnings.AddRange(logicResult.Warnings);
-
-                // TODO: Lưu vào Database (ExtractData -> Save)
-                // Hiện tại cứ trả về thành công
-                finalResult.ExtractedData = _invoiceProcessor.ExtractData(tempFilePath);
-
-                if (!finalResult.IsValid)
-                {
-                    await _storageService.DeleteFileAsync(request.S3Key);
-                    return BadRequest(finalResult);
+                    return Unauthorized(new { Message = "User identity or company information is missing in token." });
                 }
 
+                var finalResult = await _invoiceService.ProcessInvoiceXmlAsync(request.S3Key, userIdStr, companyIdStr);
+
+                // Always return Ok (200) since the processing was technically completed and recorded
                 return Ok(finalResult);
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { Message = $"Internal server error: {ex.Message}" });
-            }
-            finally
-            {
-                // Luôn dọn dẹp file tạm
-                if (tempFilePath != null && System.IO.File.Exists(tempFilePath))
-                {
-                    System.IO.File.Delete(tempFilePath);
-                }
             }
         }
 
@@ -131,17 +100,20 @@ namespace SmartInvoice.API.Controller
                 var structResult = _invoiceProcessor.ValidateStructure(tempFilePath);
                 if (!structResult.IsValid) return BadRequest(structResult);
 
-                var sigResult = _invoiceProcessor.VerifyDigitalSignature(tempFilePath);
+                var xmlDoc = new System.Xml.XmlDocument();
+                xmlDoc.PreserveWhitespace = true;
+                xmlDoc.Load(tempFilePath);
+
+                var sigResult = _invoiceProcessor.VerifyDigitalSignature(xmlDoc);
                 if (!sigResult.IsValid) return BadRequest(sigResult);
 
-                var logicResult = await _invoiceProcessor.ValidateBusinessLogicAsync(tempFilePath);
+                var logicResult = await _invoiceProcessor.ValidateBusinessLogicAsync(xmlDoc);
                 logicResult.SignerSubject = sigResult.SignerSubject;
 
                 // Move data extraction before BadRequest to ensure details are returned
-                logicResult.ExtractedData = _invoiceProcessor.ExtractData(tempFilePath);
+                logicResult.ExtractedData = _invoiceProcessor.ExtractData(xmlDoc);
 
-                if (!logicResult.IsValid) return BadRequest(logicResult);
-
+                // Always return Ok (200) for successful simulation
                 return Ok(logicResult);
             }
             catch (Exception ex)
@@ -170,8 +142,7 @@ namespace SmartInvoice.API.Controller
                 UploadedBy = Guid.Empty // Placeholder: Will be replaced by actual user ID from context
             };
 
-            _context.Invoices.Add(invoice);
-            await _context.SaveChangesAsync();
+            await _invoiceService.CreateInvoiceAsync(invoice);
 
             return Ok(invoice);
         }
