@@ -34,8 +34,13 @@ if (string.IsNullOrEmpty(connectionString))
     connectionString = $"Host={Env.GetString("POSTGRES_HOST")};Port={Env.GetString("POSTGRES_PORT")};Database={Env.GetString("POSTGRES_DB")};Username={Env.GetString("POSTGRES_USER")};Password={Env.GetString("POSTGRES_PASSWORD")}";
 }
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+dataSourceBuilder.EnableDynamicJson();
+var dataSource = dataSourceBuilder.Build();
+builder.Services.AddSingleton(dataSource);
+
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+    options.UseNpgsql(sp.GetRequiredService<Npgsql.NpgsqlDataSource>()));
 
 // 2. Kết nối AWS S3 
 // (Nó sẽ tự tìm AWS Credentials trong máy bạn ở ~/.aws/credentials hoặc biến môi trường)
@@ -174,6 +179,33 @@ using (var scope = app.Services.CreateScope())
         var context = services.GetRequiredService<AppDbContext>();
         await context.Database.MigrateAsync();
         Console.WriteLine("Database migration applied successfully.");
+
+        // Seed basic document types if missing
+        if (!context.Set<DocumentType>().Any())
+        {
+            context.Set<DocumentType>().AddRange(
+                new DocumentType
+                {
+                    TypeCode = "GTGT",
+                    TypeName = "Hóa đơn giá trị gia tăng",
+                    IsActive = true,
+                    DisplayOrder = 1,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                },
+                new DocumentType
+                {
+                    TypeCode = "SALE",
+                    TypeName = "Hóa đơn bán hàng",
+                    IsActive = true,
+                    DisplayOrder = 2,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                }
+            );
+            await context.SaveChangesAsync();
+            Console.WriteLine("Seeded initial DocumentTypes.");
+        }
     }
     catch (Exception ex)
     {

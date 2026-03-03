@@ -7,15 +7,16 @@ using SmartInvoice.API.Entities;
 
 namespace SmartInvoice.API.Services.Interfaces
 {
-    public interface IInvoiceService
-    {
-        Task<Invoice?> GetInvoiceByIdAsync(Guid id);
-        Task<IEnumerable<Invoice>> GetAllInvoicesAsync();
-        Task<Invoice> CreateInvoiceAsync(Invoice invoice);
-        Task UpdateInvoiceAsync(Guid id, UpdateInvoiceDto request);
-        Task<bool> DeleteInvoiceAsync(Guid id);
-        Task<bool> ValidateInvoiceAsync(Guid id); 
-        Task<PagedResult<InvoiceDto>> GetInvoicesAsync(int pageIndex, int pageSize);
-        Task<IEnumerable<InvoiceAuditLogDto>> GetAuditLogsAsync(Guid invoiceId);
-    }
+        public interface IInvoiceService
+        {
+                Task<Invoice?> GetInvoiceByIdAsync(Guid id);
+                Task<IEnumerable<Invoice>> GetAllInvoicesAsync();
+                Task<Invoice> CreateInvoiceAsync(Invoice invoice);
+                Task UpdateInvoiceAsync(Guid id, UpdateInvoiceDto request);
+                Task<bool> DeleteInvoiceAsync(Guid id);
+                Task<bool> ValidateInvoiceAsync(Guid id);
+                Task<PagedResult<InvoiceDto>> GetInvoicesAsync(DTOs.Invoice.GetInvoicesQueryDto query, Guid companyId, Guid userId, string userRole);
+                Task<IEnumerable<InvoiceAuditLogDto>> GetAuditLogsAsync(Guid invoiceId);
+                Task<ValidationResultDto> ProcessInvoiceXmlAsync(string s3Key, string userId, string companyId);
+        }
 }
