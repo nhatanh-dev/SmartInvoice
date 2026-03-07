@@ -59,10 +59,10 @@ public class AuditLogController : ControllerBase
 
             // Filter by date range
             if (!string.IsNullOrEmpty(query.DateFrom) && DateTime.TryParse(query.DateFrom, out var dateFrom))
-                baseQuery = baseQuery.Where(a => a.CreatedAt >= dateFrom);
+                baseQuery = baseQuery.Where(a => a.CreatedAt >= dateFrom.ToUniversalTime());
 
             if (!string.IsNullOrEmpty(query.DateTo) && DateTime.TryParse(query.DateTo, out var dateTo))
-                baseQuery = baseQuery.Where(a => a.CreatedAt <= dateTo.AddDays(1));
+                baseQuery = baseQuery.Where(a => a.CreatedAt <= dateTo.ToUniversalTime().AddDays(1));
 
             var totalCount = await baseQuery.CountAsync();
 
