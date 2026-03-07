@@ -424,6 +424,7 @@ namespace SmartInvoice.API.Services.Implementations
                     RiskLevel = r.RiskLevel,
                     ErrorMessage = r.ErrorMessage,
                     Suggestion = r.Suggestion,
+                    CheckDetails = r.CheckDetails,
                     CheckedAt = r.CheckedAt
                 }).ToList() ?? new(),
 

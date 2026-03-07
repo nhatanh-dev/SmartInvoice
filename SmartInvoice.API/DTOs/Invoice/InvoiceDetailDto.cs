@@ -92,5 +92,6 @@ public class RiskCheckDto
     public string RiskLevel { get; set; } = null!;
     public string? ErrorMessage { get; set; }
     public string? Suggestion { get; set; }
+    public string? CheckDetails { get; set; }
     public DateTime CheckedAt { get; set; }
 }

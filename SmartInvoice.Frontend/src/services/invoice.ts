@@ -87,6 +87,7 @@ export interface RiskCheckDto {
     riskLevel: string;
     errorMessage: string | null;
     suggestion: string | null;
+    checkDetails: string | null;
     checkedAt: string;
 }
 

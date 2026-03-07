@@ -62,6 +62,19 @@ const actionLabelMap: Record<string, string> = {
   OVERRIDE: 'Ghi đè rủi ro',
 };
 
+const changeValueColor = (field: string, value: string): string | undefined => {
+  const f = field.toLowerCase();
+  if (f === 'status' || f === 'Status') {
+    const map: Record<string, string> = { Draft: '#8c8c8c', Pending: '#1677ff', Approved: '#52c41a', Rejected: '#ff4d4f' };
+    return map[value];
+  }
+  if (f.includes('risk') || f === 'RiskLevel') {
+    const map: Record<string, string> = { Green: '#52c41a', Yellow: '#faad14', Orange: '#fa8c16', Red: '#ff4d4f' };
+    return map[value];
+  }
+  return undefined;
+};
+
 // ════════════════════════════════════════════
 //  Main Component
 // ════════════════════════════════════════════
@@ -213,7 +226,10 @@ const InvoiceDetail: React.FC = () => {
     { title: 'Thuế suất', dataIndex: 'vatRate', key: 'vatRate', width: 90, align: 'center' as const, render: (v: number) => `${v}%` },
     {
       title: 'Tiền thuế', dataIndex: 'vatAmount', key: 'vatAmount', width: 130, align: 'right' as const,
-      render: (v: number) => formatCurrency(v, invoice.invoiceCurrency),
+      render: (v: number, record: LineItemDto) => {
+        const computed = v || (record.totalAmount && record.vatRate ? Math.round(record.totalAmount * record.vatRate / 100) : 0);
+        return formatCurrency(computed, invoice.invoiceCurrency);
+      },
     },
   ];
 
@@ -328,12 +344,12 @@ const InvoiceDetail: React.FC = () => {
             <Card
               key={layer.layerName}
               size="small"
-              style={{ marginBottom: 12, borderRadius: 10, borderLeft: `4px solid ${layer.isValid ? '#52c41a' : '#ff4d4f'}` }}
+              style={{ marginBottom: 12, borderRadius: 10, borderLeft: `4px solid ${layer.validationStatus === 'Warning' ? '#faad14' : layer.isValid ? '#52c41a' : '#ff4d4f'}` }}
             >
               <Space>
                 {validationStatusIcon(layer.validationStatus)}
                 <Text strong>Layer {layer.layerOrder}: {layer.layerName}</Text>
-                <Tag color={layer.isValid ? 'success' : 'error'}>{layer.validationStatus}</Tag>
+                <Tag color={layer.validationStatus === 'Warning' ? 'warning' : layer.isValid ? 'success' : 'error'}>{layer.validationStatus}</Tag>
                 <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(layer.checkedAt).format('DD/MM/YYYY HH:mm')}</Text>
               </Space>
               {layer.errorDetails && (
@@ -349,7 +365,7 @@ const InvoiceDetail: React.FC = () => {
     },
     {
       key: 'risk',
-      label: <span><WarningOutlined /> Rủi ro ({invoice.riskChecks.filter(c => c.checkStatus !== 'PASS').length})</span>,
+      label: <span><WarningOutlined /> Rủi ro ({invoice.riskChecks.filter(c => c.checkStatus === 'WARNING').length})</span>,
       children: (
         <div>
           {invoice.riskChecks.map((check, idx) => (
@@ -372,10 +388,23 @@ const InvoiceDetail: React.FC = () => {
                 <Col><Text type="secondary" style={{ fontSize: 12 }}>{dayjs(check.checkedAt).format('DD/MM/YYYY HH:mm')}</Text></Col>
               </Row>
               {check.errorMessage && <div style={{ marginTop: 8 }}><Text type="danger">{check.errorMessage}</Text></div>}
+              {!check.errorMessage && check.checkDetails && (() => {
+                try {
+                  const details = JSON.parse(check.checkDetails);
+                  const warnings: string[] = details.Warnings || [];
+                  const errors: string[] = details.Errors || [];
+                  return (
+                    <>
+                      {errors.map((msg, i) => <div key={`e${i}`} style={{ marginTop: i === 0 ? 8 : 2 }}><Text type="danger" style={{ fontSize: 13 }}>{msg}</Text></div>)}
+                      {warnings.map((msg, i) => <div key={`w${i}`} style={{ marginTop: i === 0 && errors.length === 0 ? 8 : 2 }}><Text style={{ fontSize: 13, color: '#faad14' }}>{msg}</Text></div>)}
+                    </>
+                  );
+                } catch { return null; }
+              })()}
               {check.suggestion && <div style={{ marginTop: 4 }}><Text type="secondary" italic>{check.suggestion}</Text></div>}
             </Card>
           ))}
-          {invoice.riskChecks.filter(c => c.checkStatus !== 'PASS').length === 0 && <Text type="secondary">Không phát hiện rủi ro nào.</Text>}
+          {invoice.riskChecks.filter(c => c.checkStatus === 'WARNING').length === 0 && <Text type="secondary">Không phát hiện rủi ro nào.</Text>}
         </div>
       ),
     },
@@ -407,7 +436,7 @@ const InvoiceDetail: React.FC = () => {
                           <Text code>{c.field}</Text>:{' '}
                           {oldVal && <><Text delete type="secondary">{oldVal}</Text>{' → '}</>}
                           {!oldVal && newVal && <>{' → '}</>}
-                          <Text type="success">{newVal || 'Không có'}</Text>
+                          <Text style={{ color: changeValueColor(c.field, newVal || '') || '#52c41a', fontWeight: 500 }}>{newVal || 'Không có'}</Text>
                         </div>
                       );
                     })}
