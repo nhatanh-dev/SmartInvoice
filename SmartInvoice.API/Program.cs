@@ -73,6 +73,7 @@ builder.Services.AddScoped<IFileStorageService, FileStorageService>();
 builder.Services.AddScoped<ILocalBlacklistService, LocalBlacklistService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<ISystemConfigurationService, SystemConfigurationService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Add HttpClient for Services to use (like VietQR API calls)
 builder.Services.AddHttpClient();
