@@ -450,6 +450,8 @@ namespace SmartInvoice.API.Services.Implementations
             }
 
             string? tempFilePath = null;
+            var UserId = Guid.Parse(userId);
+            var CompanyId = Guid.Parse(companyId);
             try
             {
                 // 1. Tải file từ S3 về máy chủ tạm
@@ -466,7 +468,7 @@ namespace SmartInvoice.API.Services.Implementations
                 var sigResult = _invoiceProcessor.VerifyDigitalSignature(xmlDoc);
 
                 // 4. Validate Logic & Business (VietQR...)
-                var logicResult = await _invoiceProcessor.ValidateBusinessLogicAsync(xmlDoc);
+                var logicResult = await _invoiceProcessor.ValidateBusinessLogicAsync(xmlDoc, CompanyId);
 
                 // 5. Gộp tất cả các lỗi và cảnh báo lại thành một kết quả duy nhất
                 var finalResult = new ValidationResultDto
@@ -487,9 +489,17 @@ namespace SmartInvoice.API.Services.Implementations
                 // Trích xuất dữ liệu
                 finalResult.ExtractedData = _invoiceProcessor.ExtractData(xmlDoc);
 
+                // --- KIỂM TRA LỖI NGHIÊM TRỌNG: Không lưu DB nếu là trùng lặp hoặc lỗi quyền sở hữu ---
+                var hasFatalError = finalResult.Errors.Any(e =>
+                    e.Contains("[RỦI RO TRÙNG LẶP]") ||
+                    e.Contains("[LỖI QUYỀN SỞ HỮU]"));
+
+                if (hasFatalError)
+                {
+                    return finalResult; // Trả kết quả ngay, KHÔNG lưu vào Database
+                }
+
                 // --- LƯU VÀO DATABASE ---
-                var UserId = Guid.Parse(userId);
-                var CompanyId = Guid.Parse(companyId);
 
                 var docTypes = await _unitOfWork.DocumentTypes.GetAllAsync();
 

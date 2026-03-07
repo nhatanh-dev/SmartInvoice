@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   SearchOutlined, FilterOutlined, DownloadOutlined, PlusOutlined,
-  EyeOutlined, EditOutlined, MoreOutlined, DeleteOutlined, SendOutlined, CloseOutlined,
+  EyeOutlined, EditOutlined, MoreOutlined, DeleteOutlined, SendOutlined, CloseOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -15,12 +15,9 @@ import StatusBadge from '../components/ui/StatusBadge';
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-const riskColors: Record<string, string> = {
-  Green: '#2d9a5c', Yellow: '#e6a817', Orange: '#e17055', Red: '#d63031',
-};
-
 const InvoiceList: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [showFilters, setShowFilters] = useState(false);
 
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10 });
@@ -31,10 +28,10 @@ const InvoiceList: React.FC = () => {
   const [dateRange, setDateRange] = useState<[string, string]>();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
-  const { data: invoiceData, isLoading, isError } = useQuery({
+  const { data: invoiceData, isLoading } = useQuery({
     queryKey: ['invoices', pagination.current, pagination.pageSize, keyword, status, riskLevel, dateRange],
     queryFn: () => invoiceService.getInvoices(
-      pagination.current, 
+      pagination.current,
       pagination.pageSize,
       keyword,
       status,
@@ -44,17 +41,63 @@ const InvoiceList: React.FC = () => {
     ),
   });
 
-  const queryClient = useQueryClient();
-
-  const invoices = invoiceData?.items || [];
-  const totalInvoices = invoiceData?.totalCount || 0;
+  const submitMutation = useMutation({
+    mutationFn: (id: string) => invoiceService.submitInvoice(id),
+    onSuccess: () => {
+      message.success('Đã gửi hóa đơn chờ duyệt thành công!');
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (err: any) => {
+      message.error(`Lỗi gửi duyệt: ${err?.response?.data?.message || err.message}`);
+    }
+  });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => invoiceService.deleteInvoice(id),
     onSuccess: () => {
+      message.success('Đã xóa hóa đơn thành công!');
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
     },
+    onError: (err: any) => {
+      message.error(`Lỗi xóa: ${err?.response?.data?.message || err.message}`);
+    }
   });
+
+  const handleSubmit = (record: any) => {
+    Modal.confirm({
+      title: 'Gửi hóa đơn chờ duyệt?',
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <div>
+          <p>Bạn sắp gửi hóa đơn <strong>{record.invoiceNumber}</strong> cho Admin duyệt.</p>
+          <p style={{ color: '#888' }}>Sau khi gửi, trạng thái sẽ chuyển từ <Tag color="default">Draft</Tag> sang <Tag color="processing">Pending</Tag></p>
+        </div>
+      ),
+      okText: 'Gửi duyệt',
+      cancelText: 'Hủy',
+      onOk: () => submitMutation.mutateAsync(record.invoiceId),
+    });
+  };
+
+  const handleDelete = (record: any) => {
+    Modal.confirm({
+      title: 'Xóa hóa đơn?',
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      content: (
+        <div>
+          <p>Bạn có chắc muốn xóa hóa đơn <strong>{record.invoiceNumber}</strong>?</p>
+          <p style={{ color: '#ff4d4f' }}>Hành động này không thể hoàn tác.</p>
+        </div>
+      ),
+      okText: 'Xóa',
+      okType: 'danger',
+      cancelText: 'Hủy',
+      onOk: () => deleteMutation.mutateAsync(record.invoiceId),
+    });
+  };
+
+  const invoices = invoiceData?.items || [];
+  const totalInvoices = invoiceData?.totalCount || 0;
 
   // ── Bulk Operations ──
   const selectedInvoices = invoices.filter((inv: any) => selectedRowKeys.includes(inv.invoiceId));
@@ -142,7 +185,7 @@ const InvoiceList: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 140,
-      render: (status: string) => <div style={{ whiteSpace: 'nowrap' }}><StatusBadge type="status" value={status} /></div>,
+      render: (st: string) => <div style={{ whiteSpace: 'nowrap' }}><StatusBadge type="status" value={st} /></div>,
     },
     {
       title: 'Rủi ro',
@@ -155,29 +198,40 @@ const InvoiceList: React.FC = () => {
       title: '',
       key: 'actions',
       width: 48,
-      render: (_: any, record: any) => (
-        <Dropdown menu={{
-          items: [
-            { key: 'view', icon: <EyeOutlined />, label: 'Xem chi tiết' },
-            { key: 'edit', icon: <EditOutlined />, label: 'Chỉnh sửa', disabled: record.status !== 'Draft' && record.status !== 'Rejected' },
+      render: (_: any, record: any) => {
+        const isDraft = record.status === 'Draft';
+        const menuItems: any[] = [
+          { key: 'view', icon: <EyeOutlined />, label: 'Xem chi tiết' },
+        ];
+
+        if (isDraft) {
+          menuItems.push(
+            { key: 'edit', icon: <EditOutlined />, label: 'Chỉnh sửa' },
+            { key: 'submit', icon: <SendOutlined />, label: 'Gửi duyệt' },
+            { type: 'divider' },
+            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa hóa đơn', danger: true },
+          );
+        } else {
+          menuItems.push(
             { key: 'download', icon: <DownloadOutlined />, label: 'Tải xuống' },
-            { type: 'divider' as const },
-            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa', danger: true, disabled: record.status !== 'Draft' },
-          ],
-          onClick: ({ key, domEvent }: any) => {
-            domEvent.stopPropagation();
-            if (key === 'view') navigate(`/app/invoices/${record.invoiceId}`);
-            else if (key === 'edit') navigate(`/app/invoices/${record.invoiceId}`);
-            else if (key === 'delete') {
-              if (window.confirm('Bạn có chắc muốn xóa hóa đơn này?')) {
-                deleteMutation.mutate(record.invoiceId);
-              }
+          );
+        }
+
+        return (
+          <Dropdown menu={{
+            items: menuItems,
+            onClick: ({ key, domEvent }: any) => {
+              domEvent.stopPropagation();
+              if (key === 'view') navigate(`/app/invoices/${record.invoiceId}`);
+              else if (key === 'edit') navigate(`/app/invoices/${record.invoiceId}`);
+              else if (key === 'submit') handleSubmit(record);
+              else if (key === 'delete') handleDelete(record);
             }
-          },
-        }} trigger={['click']}>
-          <Button type="text" icon={<MoreOutlined />} size="small" onClick={e => e.stopPropagation()} />
-        </Dropdown>
-      ),
+          }} trigger={['click']}>
+            <Button type="text" icon={<MoreOutlined />} size="small" onClick={e => e.stopPropagation()} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
