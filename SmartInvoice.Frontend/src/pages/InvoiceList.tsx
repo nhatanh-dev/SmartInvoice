@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import dayjs from 'dayjs';
 import {
-  Card, Table, Tag, Input, Select, DatePicker, Button, Space, Typography, Row, Col, Dropdown, Badge,
+  Card, Table, Tag, Input, Select, DatePicker, Button, Space, Typography, Row, Col, Dropdown, Badge, message, Modal,
 } from 'antd';
 import {
   SearchOutlined, FilterOutlined, DownloadOutlined, PlusOutlined,
-  EyeOutlined, EditOutlined, MoreOutlined,
+  EyeOutlined, EditOutlined, MoreOutlined, DeleteOutlined, SendOutlined, CloseOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { invoiceService } from '../services/invoice';
 import StatusBadge from '../components/ui/StatusBadge';
 
@@ -25,9 +25,11 @@ const InvoiceList: React.FC = () => {
 
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10 });
   const [keyword, setKeyword] = useState<string>();
+  const [searchText, setSearchText] = useState('');
   const [status, setStatus] = useState<string>();
   const [riskLevel, setRiskLevel] = useState<string>();
   const [dateRange, setDateRange] = useState<[string, string]>();
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   const { data: invoiceData, isLoading, isError } = useQuery({
     queryKey: ['invoices', pagination.current, pagination.pageSize, keyword, status, riskLevel, dateRange],
@@ -42,8 +44,45 @@ const InvoiceList: React.FC = () => {
     ),
   });
 
+  const queryClient = useQueryClient();
+
   const invoices = invoiceData?.items || [];
   const totalInvoices = invoiceData?.totalCount || 0;
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => invoiceService.deleteInvoice(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+  });
+
+  // ── Bulk Operations ──
+  const selectedInvoices = invoices.filter((inv: any) => selectedRowKeys.includes(inv.invoiceId));
+  const allSelectedAreDraft = selectedInvoices.length > 0 && selectedInvoices.every((inv: any) => inv.status === 'Draft');
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map(id => invoiceService.deleteInvoice(id)));
+    },
+    onSuccess: () => {
+      message.success(`Đã xóa ${selectedRowKeys.length} hóa đơn`);
+      setSelectedRowKeys([]);
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: () => message.error('Có lỗi khi xóa hóa đơn'),
+  });
+
+  const bulkSubmitMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map(id => invoiceService.submitInvoice(id)));
+    },
+    onSuccess: () => {
+      message.success(`Đã gửi duyệt ${selectedRowKeys.length} hóa đơn`);
+      setSelectedRowKeys([]);
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: () => message.error('Có lỗi khi gửi duyệt hóa đơn'),
+  });
 
   const columns = [
     {
@@ -116,15 +155,27 @@ const InvoiceList: React.FC = () => {
       title: '',
       key: 'actions',
       width: 48,
-      render: () => (
+      render: (_: any, record: any) => (
         <Dropdown menu={{
           items: [
             { key: 'view', icon: <EyeOutlined />, label: 'Xem chi tiết' },
-            { key: 'edit', icon: <EditOutlined />, label: 'Chỉnh sửa' },
+            { key: 'edit', icon: <EditOutlined />, label: 'Chỉnh sửa', disabled: record.status !== 'Draft' && record.status !== 'Rejected' },
             { key: 'download', icon: <DownloadOutlined />, label: 'Tải xuống' },
+            { type: 'divider' as const },
+            { key: 'delete', icon: <DeleteOutlined />, label: 'Xóa', danger: true, disabled: record.status !== 'Draft' },
           ],
+          onClick: ({ key, domEvent }: any) => {
+            domEvent.stopPropagation();
+            if (key === 'view') navigate(`/app/invoices/${record.invoiceId}`);
+            else if (key === 'edit') navigate(`/app/invoices/${record.invoiceId}`);
+            else if (key === 'delete') {
+              if (window.confirm('Bạn có chắc muốn xóa hóa đơn này?')) {
+                deleteMutation.mutate(record.invoiceId);
+              }
+            }
+          },
         }} trigger={['click']}>
-          <Button type="text" icon={<MoreOutlined />} size="small" />
+          <Button type="text" icon={<MoreOutlined />} size="small" onClick={e => e.stopPropagation()} />
         </Dropdown>
       ),
     },
@@ -141,23 +192,78 @@ const InvoiceList: React.FC = () => {
           <Button icon={<DownloadOutlined />} style={{ borderRadius: 10, fontWeight: 600, height: 42, color: '#4880FF', borderColor: '#4880FF' }}>
             Xuất Excel
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/upload')} style={{ borderRadius: 10, fontWeight: 600, height: 42, background: '#4880FF', border: 'none' }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/app/upload')} style={{ borderRadius: 10, fontWeight: 600, height: 42, background: '#4880FF', border: 'none' }}>
             Tải lên hóa đơn
           </Button>
         </Space>
       </div>
 
       <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash overflow-hidden" bodyStyle={{ padding: 0 }}>
+        {/* Bulk Action Bar */}
+        {selectedRowKeys.length > 0 && (
+          <div style={{ padding: '12px 24px', background: '#f0f5ff', borderBottom: '1px solid #d6e4ff', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Text strong style={{ color: '#1677ff' }}>Đã chọn {selectedRowKeys.length} hóa đơn</Text>
+            <Button
+              size="small"
+              icon={<SendOutlined />}
+              type="primary"
+              disabled={!allSelectedAreDraft}
+              loading={bulkSubmitMutation.isPending}
+              onClick={() => {
+                Modal.confirm({
+                  title: `Gửi duyệt ${selectedRowKeys.length} hóa đơn?`,
+                  content: 'Tất cả hóa đơn đã chọn sẽ chuyển sang trạng thái "Chờ duyệt".',
+                  okText: 'Gửi duyệt',
+                  cancelText: 'Hủy',
+                  onOk: () => bulkSubmitMutation.mutate(selectedRowKeys as string[]),
+                });
+              }}
+              style={{ borderRadius: 8, fontWeight: 600 }}
+            >
+              Gửi duyệt
+            </Button>
+            <Button
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              disabled={!allSelectedAreDraft}
+              loading={bulkDeleteMutation.isPending}
+              onClick={() => {
+                Modal.confirm({
+                  title: `Xóa ${selectedRowKeys.length} hóa đơn?`,
+                  content: 'Hành động này không thể hoàn tác.',
+                  okText: 'Xóa',
+                  cancelText: 'Hủy',
+                  okButtonProps: { danger: true },
+                  onOk: () => bulkDeleteMutation.mutate(selectedRowKeys as string[]),
+                });
+              }}
+              style={{ borderRadius: 8, fontWeight: 600 }}
+            >
+              Xóa
+            </Button>
+            {!allSelectedAreDraft && (
+              <Text type="secondary" style={{ fontSize: 12 }}>Chỉ hóa đơn Nháp mới có thể gửi duyệt hoặc xóa hàng loạt</Text>
+            )}
+            <Button type="text" size="small" icon={<CloseOutlined />} style={{ marginLeft: 'auto' }} onClick={() => setSelectedRowKeys([])}>
+              Bỏ chọn
+            </Button>
+          </div>
+        )}
+
         {/* Search & Filter Bar */}
         <div style={{ padding: '16px 24px', borderBottom: '1px solid #E2E8F0' }}>
           <Row gutter={12} align="middle">
             <Col flex="auto">
               <Input.Search
                 placeholder="Tìm kiếm theo số hóa đơn, MST, tên người bán..."
-                onSearch={val => { setKeyword(val); setPagination(prev => ({ ...prev, current: 1 })); }}
+                value={searchText}
+                onChange={e => setSearchText(e.target.value)}
+                onSearch={val => { setKeyword(val || undefined); setPagination(prev => ({ ...prev, current: 1 })); }}
                 enterButton={<SearchOutlined />}
                 style={{ borderRadius: 10 }}
                 allowClear
+                onClear={() => { setSearchText(''); setKeyword(undefined); setPagination(prev => ({ ...prev, current: 1 })); }}
               />
             </Col>
             <Col>
@@ -176,6 +282,7 @@ const InvoiceList: React.FC = () => {
             <Row gutter={12} style={{ marginTop: 12 }}>
               <Col xs={24} sm={8}>
                 <Select placeholder="Trạng thái" style={{ width: '100%' }} allowClear
+                  value={status}
                   onChange={val => { setStatus(val); setPagination(prev => ({ ...prev, current: 1 })); }}
                   options={[
                     { value: 'Draft', label: 'Nháp' },
@@ -187,6 +294,7 @@ const InvoiceList: React.FC = () => {
               </Col>
               <Col xs={24} sm={8}>
                 <Select placeholder="Mức rủi ro" style={{ width: '100%' }} allowClear
+                  value={riskLevel}
                   onChange={val => { setRiskLevel(val); setPagination(prev => ({ ...prev, current: 1 })); }}
                   options={[
                     { value: 'Green', label: '🟢 An toàn' },
@@ -215,7 +323,12 @@ const InvoiceList: React.FC = () => {
         <Table
           columns={columns}
           dataSource={invoices}
+          rowKey="invoiceId"
           loading={isLoading}
+          onRow={(record: any) => ({
+            onClick: () => navigate(`/app/invoices/${record.invoiceId}`),
+            style: { cursor: 'pointer' },
+          })}
           onChange={(newPagination) => setPagination({ current: newPagination.current || 1, pageSize: newPagination.pageSize || 10 })}
           pagination={{
             current: pagination.current,
@@ -225,7 +338,12 @@ const InvoiceList: React.FC = () => {
             showTotal: (total) => `Tổng ${total} hóa đơn`,
             style: { padding: '16px 24px', margin: 0, borderTop: '1px solid #E2E8F0' }
           }}
-          rowSelection={{ type: 'checkbox', columnWidth: 48 }}
+          rowSelection={{
+            type: 'checkbox',
+            columnWidth: 48,
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys),
+          }}
           rowClassName={() => 'hover:bg-dash-bg/50 transition-colors'}
           components={{
             header: {
