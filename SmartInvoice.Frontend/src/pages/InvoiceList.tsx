@@ -1,38 +1,53 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import dayjs from 'dayjs';
 import {
   Card, Table, Tag, Input, Select, DatePicker, Button, Space, Typography, Row, Col, Dropdown, Badge, message, Modal,
 } from 'antd';
 import {
   SearchOutlined, FilterOutlined, DownloadOutlined, PlusOutlined,
-  EyeOutlined, EditOutlined, MoreOutlined, DeleteOutlined, SendOutlined, CloseOutlined, ExclamationCircleOutlined,
+  EyeOutlined, EditOutlined, MoreOutlined, DeleteOutlined, SendOutlined, CloseOutlined, ExclamationCircleOutlined, WarningOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { invoiceService } from '../services/invoice';
 import StatusBadge from '../components/ui/StatusBadge';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
 
 const InvoiceList: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(() => !!(searchParams.get('status') || searchParams.get('riskLevel') || searchParams.get('dateFrom')));
 
-  const [pagination, setPagination] = useState({ current: 1, pageSize: 10 });
-  const [keyword, setKeyword] = useState<string>();
-  const [searchText, setSearchText] = useState('');
-  const [status, setStatus] = useState<string>();
-  const [riskLevel, setRiskLevel] = useState<string>();
-  const [dateRange, setDateRange] = useState<[string, string]>();
+  // Derive filter state from URL search params
+  const keyword = searchParams.get('keyword') || undefined;
+  const status = searchParams.get('status') || undefined;
+  const riskLevel = searchParams.get('riskLevel') || undefined;
+  const dateFrom = searchParams.get('dateFrom') || undefined;
+  const dateTo = searchParams.get('dateTo') || undefined;
+  const dateRange: [string, string] | undefined = dateFrom && dateTo ? [dateFrom, dateTo] : undefined;
+  const page = Number(searchParams.get('page')) || 1;
+  const pageSize = Number(searchParams.get('pageSize')) || 10;
+
+  const [searchText, setSearchText] = useState(keyword || '');
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
+  const updateParams = (updates: Record<string, string | undefined>) => {
+    const newParams = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') newParams.set(key, value);
+      else newParams.delete(key);
+    });
+    setSearchParams(newParams, { replace: true });
+  };
+
   const { data: invoiceData, isLoading } = useQuery({
-    queryKey: ['invoices', pagination.current, pagination.pageSize, keyword, status, riskLevel, dateRange],
+    queryKey: ['invoices', page, pageSize, keyword, status, riskLevel, dateRange],
     queryFn: () => invoiceService.getInvoices(
-      pagination.current,
-      pagination.pageSize,
+      page,
+      pageSize,
       keyword,
       status,
       riskLevel,
@@ -42,9 +57,9 @@ const InvoiceList: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: (id: string) => invoiceService.submitInvoice(id),
+    mutationFn: ({ id, comment }: { id: string; comment?: string }) => invoiceService.submitInvoice(id, comment),
     onSuccess: () => {
-      message.success('Đã gửi hóa đơn chờ duyệt thành công!');
+      message.success('Dã gửi hóa đơn chờ duyệt thành công!');
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
     },
     onError: (err: any) => {
@@ -64,19 +79,47 @@ const InvoiceList: React.FC = () => {
   });
 
   const handleSubmit = (record: any) => {
-    Modal.confirm({
-      title: 'Gửi hóa đơn chờ duyệt?',
-      icon: <ExclamationCircleOutlined />,
-      content: (
-        <div>
-          <p>Bạn sắp gửi hóa đơn <strong>{record.invoiceNumber}</strong> cho Admin duyệt.</p>
-          <p style={{ color: '#888' }}>Sau khi gửi, trạng thái sẽ chuyển từ <Tag color="default">Draft</Tag> sang <Tag color="processing">Pending</Tag></p>
-        </div>
-      ),
-      okText: 'Gửi duyệt',
-      cancelText: 'Hủy',
-      onOk: () => submitMutation.mutateAsync(record.invoiceId),
-    });
+    const isYellow = record.riskLevel === 'Yellow';
+
+    if (isYellow) {
+      // Yellow: requires comment/explanation
+      let comment = '';
+      Modal.confirm({
+        title: <Space><WarningOutlined style={{ color: '#faad14' }} /><span>Gửi duyệt hóa đơn cảnh báo</span></Space>,
+        icon: null,
+        content: (
+          <div>
+            <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+              Hóa đơn <strong>{record.invoiceNumber}</strong> có rủi ro <Tag color="warning">Yellow</Tag>.
+              Vui lòng nhập lý do giải trình để Admin xem xét.
+            </Paragraph>
+            <Input.TextArea
+              rows={3}
+              placeholder="Ví dụ: Hóa đơn xăng công tác, không có MST người mua..."
+              onChange={e => { comment = e.target.value; }}
+            />
+          </div>
+        ),
+        okText: 'Xác nhận gửi duyệt',
+        cancelText: 'Hủy',
+        onOk: () => submitMutation.mutateAsync({ id: record.invoiceId, comment: comment || undefined }),
+      });
+    } else {
+      // Green: simple confirm
+      Modal.confirm({
+        title: 'Gửi hóa đơn chờ duyệt?',
+        icon: <ExclamationCircleOutlined />,
+        content: (
+          <div>
+            <p>Bạn sắp gửi hóa đơn <strong>{record.invoiceNumber}</strong> cho Admin duyệt.</p>
+            <p style={{ color: '#888' }}>Sau khi gửi, trạng thái sẽ chuyển từ <Tag color="default">Draft</Tag> sang <Tag color="processing">Pending</Tag></p>
+          </div>
+        ),
+        okText: 'Gửi duyệt',
+        cancelText: 'Hủy',
+        onOk: () => submitMutation.mutateAsync({ id: record.invoiceId }),
+      });
+    }
   };
 
   const handleDelete = (record: any) => {
@@ -116,16 +159,88 @@ const InvoiceList: React.FC = () => {
   });
 
   const bulkSubmitMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      await Promise.all(ids.map(id => invoiceService.submitInvoice(id)));
+    mutationFn: async ({ ids, comment }: { ids: string[]; comment?: string }) => {
+      const result = await invoiceService.submitBatch(ids, comment);
+      return result;
     },
-    onSuccess: () => {
-      message.success(`Đã gửi duyệt ${selectedRowKeys.length} hóa đơn`);
+    onSuccess: (result) => {
+      message.success(`Đã gửi duyệt ${result.successCount} hóa đơn` + (result.failCount > 0 ? `, ${result.failCount} lỗi` : ''));
       setSelectedRowKeys([]);
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
     },
     onError: () => message.error('Có lỗi khi gửi duyệt hóa đơn'),
   });
+
+  const handleBulkSubmit = async () => {
+    const greens = selectedInvoices.filter((inv: any) => inv.status === 'Draft' && inv.riskLevel !== 'Yellow');
+    const yellows = selectedInvoices.filter((inv: any) => inv.status === 'Draft' && inv.riskLevel === 'Yellow');
+
+    // 1. Batch-submit all Green invoices at once via a single API call
+    if (greens.length > 0) {
+      Modal.confirm({
+        title: `Gửi duyệt ${greens.length} hóa đơn hợp lệ?`,
+        content: `${greens.length} hóa đơn Green sẽ chuyển sang trạng thái "Chờ duyệt".`,
+        okText: 'Gửi duyệt',
+        cancelText: 'Hủy',
+        onOk: async () => {
+          await bulkSubmitMutation.mutateAsync({ ids: greens.map((g: any) => g.invoiceId) });
+          // After greens done, prompt yellows sequentially
+          if (yellows.length > 0) promptYellowSequentially(yellows, 0);
+        },
+      });
+    } else if (yellows.length > 0) {
+      // No greens — go straight to prompting yellows
+      message.info(`${yellows.length} hóa đơn Yellow cần giải trình từng cái.`);
+      promptYellowSequentially(yellows, 0);
+    }
+  };
+
+  // Sequentially open a giải trình modal for each yellow invoice
+  const promptYellowSequentially = (yellows: any[], index: number) => {
+    if (index >= yellows.length) return;
+    const inv = yellows[index];
+    let comment = '';
+    Modal.confirm({
+      title: <Space><WarningOutlined style={{ color: '#faad14' }} /><span>Giải trình: {inv.invoiceNumber} ({index + 1}/{yellows.length})</span></Space>,
+      icon: null,
+      content: (
+        <div>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            Hóa đơn <strong>{inv.invoiceNumber}</strong> có rủi ro <Tag color="warning">Yellow</Tag>.<br />
+            Nhập lý do giải trình để Admin xét duyệt.
+          </Paragraph>
+          <Input.TextArea
+            rows={3}
+            placeholder="Ví dụ: Hóa đơn xăng công tác, cây xăng không xuất hoá đơn có MST người mua..."
+            onChange={e => { comment = e.target.value; }}
+          />
+        </div>
+      ),
+      okText: index < yellows.length - 1 ? 'Xác nhận → tiếp theo' : 'Xác nhận gửi duyệt',
+      cancelText: 'Bỏ qua hóa đơn này',
+      onOk: async () => {
+        try {
+          await invoiceService.submitInvoice(inv.invoiceId, comment || undefined);
+          message.success(`Đã gửi duyệt: ${inv.invoiceNumber}`);
+        } catch (err: any) {
+          message.error(`Lỗi gửi duyệt ${inv.invoiceNumber}: ${err?.response?.data?.message || err.message}`);
+        }
+        // Regardless of success/fail, move to next yellow
+        promptYellowSequentially(yellows, index + 1);
+      },
+      onCancel: () => {
+        // Skip this yellow, continue with next
+        promptYellowSequentially(yellows, index + 1);
+      },
+      afterClose: () => {
+        // Refresh list after the last yellow is processed
+        if (index === yellows.length - 1) {
+          setSelectedRowKeys([]);
+          queryClient.invalidateQueries({ queryKey: ['invoices'] });
+        }
+      },
+    });
+  };
 
   const columns = [
     {
@@ -263,15 +378,7 @@ const InvoiceList: React.FC = () => {
               type="primary"
               disabled={!allSelectedAreDraft}
               loading={bulkSubmitMutation.isPending}
-              onClick={() => {
-                Modal.confirm({
-                  title: `Gửi duyệt ${selectedRowKeys.length} hóa đơn?`,
-                  content: 'Tất cả hóa đơn đã chọn sẽ chuyển sang trạng thái "Chờ duyệt".',
-                  okText: 'Gửi duyệt',
-                  cancelText: 'Hủy',
-                  onOk: () => bulkSubmitMutation.mutate(selectedRowKeys as string[]),
-                });
-              }}
+              onClick={handleBulkSubmit}
               style={{ borderRadius: 8, fontWeight: 600 }}
             >
               Gửi duyệt
@@ -313,11 +420,11 @@ const InvoiceList: React.FC = () => {
                 placeholder="Tìm kiếm theo số hóa đơn, MST, tên người bán..."
                 value={searchText}
                 onChange={e => setSearchText(e.target.value)}
-                onSearch={val => { setKeyword(val || undefined); setPagination(prev => ({ ...prev, current: 1 })); }}
+                onSearch={val => updateParams({ keyword: val || undefined, page: '1' })}
                 enterButton={<SearchOutlined />}
                 style={{ borderRadius: 10 }}
                 allowClear
-                onClear={() => { setSearchText(''); setKeyword(undefined); setPagination(prev => ({ ...prev, current: 1 })); }}
+                onClear={() => { setSearchText(''); updateParams({ keyword: undefined, page: '1' }); }}
               />
             </Col>
             <Col>
@@ -337,7 +444,7 @@ const InvoiceList: React.FC = () => {
               <Col xs={24} sm={8}>
                 <Select placeholder="Trạng thái" style={{ width: '100%' }} allowClear
                   value={status}
-                  onChange={val => { setStatus(val); setPagination(prev => ({ ...prev, current: 1 })); }}
+                  onChange={val => updateParams({ status: val, page: '1' })}
                   options={[
                     { value: 'Draft', label: 'Nháp' },
                     { value: 'Pending', label: 'Chờ duyệt' },
@@ -349,24 +456,23 @@ const InvoiceList: React.FC = () => {
               <Col xs={24} sm={8}>
                 <Select placeholder="Mức rủi ro" style={{ width: '100%' }} allowClear
                   value={riskLevel}
-                  onChange={val => { setRiskLevel(val); setPagination(prev => ({ ...prev, current: 1 })); }}
+                  onChange={val => updateParams({ riskLevel: val, page: '1' })}
                   options={[
                     { value: 'Green', label: '🟢 An toàn' },
                     { value: 'Yellow', label: '🟡 Lưu ý' },
-                    { value: 'Orange', label: '🟠 Cảnh báo' },
                     { value: 'Red', label: '🔴 Nguy hiểm' },
                   ]}
                 />
               </Col>
               <Col xs={24} sm={8}>
                 <RangePicker style={{ width: '100%' }} placeholder={['Từ ngày', 'Đến ngày']}
+                  value={dateFrom && dateTo ? [dayjs(dateFrom), dayjs(dateTo)] : undefined}
                   onChange={dates => {
                     if (dates && dates[0] && dates[1]) {
-                      setDateRange([dates[0].toISOString(), dates[1].toISOString()]);
+                      updateParams({ dateFrom: dates[0].toISOString(), dateTo: dates[1].toISOString(), page: '1' });
                     } else {
-                      setDateRange(undefined);
+                      updateParams({ dateFrom: undefined, dateTo: undefined, page: '1' });
                     }
-                    setPagination(prev => ({ ...prev, current: 1 }));
                   }}
                 />
               </Col>
@@ -383,10 +489,10 @@ const InvoiceList: React.FC = () => {
             onClick: () => navigate(`/app/invoices/${record.invoiceId}`),
             style: { cursor: 'pointer' },
           })}
-          onChange={(newPagination) => setPagination({ current: newPagination.current || 1, pageSize: newPagination.pageSize || 10 })}
+          onChange={(newPagination) => updateParams({ page: String(newPagination.current || 1), pageSize: String(newPagination.pageSize || 10) })}
           pagination={{
-            current: pagination.current,
-            pageSize: pagination.pageSize,
+            current: page,
+            pageSize: pageSize,
             total: totalInvoices,
             showSizeChanger: true,
             showTotal: (total) => `Tổng ${total} hóa đơn`,

@@ -29,13 +29,23 @@ public class ValidationController : ControllerBase
     {
         // ── Tenant scoping ──────────────────────────────
         var companyIdClaim = User.FindFirst("CompanyId")?.Value;
-        if (string.IsNullOrEmpty(companyIdClaim) || !Guid.TryParse(companyIdClaim, out var companyId))
+        var userIdClaim = User.FindFirst("UserId")?.Value;
+        var userRole = User.Claims.FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.Role)?.Value ?? "Member";
+
+        if (string.IsNullOrEmpty(companyIdClaim) || !Guid.TryParse(companyIdClaim, out var companyId) ||
+            string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
             return Forbid();
 
         // ── Base query: invoices that have at least one validation layer ──
         var invoicesQuery = _db.Invoices
             .Where(i => i.CompanyId == companyId && !i.IsDeleted)
             .Where(i => i.ValidationLayers.Any());
+
+        // RBAC: Member only sees their own uploaded invoices
+        if (userRole == "Member")
+        {
+            invoicesQuery = invoicesQuery.Where(i => i.UploadedBy == userId);
+        }
 
         // ── Summary statistics (from full set, ignoring filters) ──────
         var allValidated = await invoicesQuery
@@ -94,9 +104,15 @@ public class ValidationController : ControllerBase
             );
         }
 
-        if (!string.IsNullOrWhiteSpace(query.RiskLevel))
+        if (!string.IsNullOrWhiteSpace(query.LayerIssue))
         {
-            filteredQuery = filteredQuery.Where(i => i.RiskLevel == query.RiskLevel);
+            var layer = query.LayerIssue.ToLower();
+            int layerOrder = layer == "layer1" ? 1 : layer == "layer2" ? 2 : layer == "layer3" ? 3 : 0;
+            if (layerOrder > 0)
+            {
+                filteredQuery = filteredQuery.Where(i =>
+                    i.ValidationLayers.Any(v => v.LayerOrder == layerOrder && (v.ValidationStatus == "Fail" || v.ValidationStatus == "Warning")));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(query.ValidationStatus))

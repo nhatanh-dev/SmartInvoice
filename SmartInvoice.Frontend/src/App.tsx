@@ -6,6 +6,7 @@ import theme from './theme/antdTheme';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import AppLayout from './layouts/AppLayout';
+import SuperAdminLayout from './layouts/SuperAdminLayout';
 import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -35,7 +36,8 @@ const App = () => (
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
-            <Route path="/app" element={<ProtectedRoute />}>
+            {/* Company Routes (Member & CompanyAdmin only) */}
+            <Route path="/app" element={<ProtectedRoute allowedRoles={['Member', 'CompanyAdmin']} />}>
               <Route element={<AppLayout />}>
                 <Route index element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard />} />
@@ -44,13 +46,24 @@ const App = () => (
                 <Route path="upload" element={<UploadInvoice />} />
                 <Route path="validation" element={<ValidationPage />} />
                 <Route path="reports" element={<ReportsPage />} />
-                <Route path="audit-log" element={<AuditLogPage />} />
-                <Route path="approval-dashboard" element={<ApprovalDashboard />} />
-                <Route path="team" element={<TeamManagement />} />
+                <Route path="profile" element={<Profile />} />
+
+                {/* CompanyAdmin Only Routes */}
+                <Route element={<ProtectedRoute allowedRoles={['CompanyAdmin']} />}>
+                  <Route path="approval-dashboard" element={<ApprovalDashboard />} />
+                  <Route path="team" element={<TeamManagement />} />
+                  <Route path="audit-log" element={<AuditLogPage />} />
+                </Route>
+              </Route>
+            </Route>
+
+            {/* SuperAdmin Routes */}
+            <Route path="/admin" element={<ProtectedRoute allowedRoles={['SuperAdmin']} />}>
+              <Route element={<SuperAdminLayout />}>
+                <Route index element={<Navigate to="/admin/tenants" replace />} />
                 <Route path="tenants" element={<TenantManagement />} />
                 <Route path="global-blacklist" element={<GlobalBlacklist />} />
                 <Route path="system-config" element={<SystemConfig />} />
-                <Route path="profile" element={<Profile />} />
               </Route>
             </Route>
             <Route path="*" element={<NotFound />} />

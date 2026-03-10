@@ -62,17 +62,37 @@ const actionLabelMap: Record<string, string> = {
   OVERRIDE: 'Ghi đè rủi ro',
 };
 
-const changeValueColor = (field: string, value: string): string | undefined => {
+const statusColorConfig: Record<string, { bg: string; text: string }> = {
+  Draft: { bg: '#E2E8F014', text: '#8c8c8c' },
+  Pending: { bg: '#1677ff14', text: '#1677ff' },
+  Approved: { bg: '#52c41a14', text: '#52c41a' },
+  Rejected: { bg: '#ff4d4f14', text: '#ff4d4f' },
+};
+
+const riskColorConfig: Record<string, { bg: string; text: string }> = {
+  Green: { bg: '#52c41a14', text: '#52c41a' },
+  Yellow: { bg: '#faad1414', text: '#faad14' },
+  Red: { bg: '#ff4d4f14', text: '#ff4d4f' },
+};
+
+const ChangeValueBadge: React.FC<{ field: string; value: string }> = ({ field, value }) => {
   const f = field.toLowerCase();
-  if (f === 'status' || f === 'Status') {
-    const map: Record<string, string> = { Draft: '#8c8c8c', Pending: '#1677ff', Approved: '#52c41a', Rejected: '#ff4d4f' };
-    return map[value];
+  let config: { bg: string; text: string } | undefined;
+  let label = value;
+  if (f === 'status') {
+    config = statusColorConfig[value];
+  } else if (f.includes('risk') || f === 'risklevel') {
+    config = riskColorConfig[value];
   }
-  if (f.includes('risk') || f === 'RiskLevel') {
-    const map: Record<string, string> = { Green: '#52c41a', Yellow: '#faad14', Orange: '#fa8c16', Red: '#ff4d4f' };
-    return map[value];
+  if (config) {
+    return (
+      <span style={{
+        display: 'inline-block', padding: '1px 8px', borderRadius: 10,
+        fontSize: 12, fontWeight: 600, background: config.bg, color: config.text,
+      }}>{label}</span>
+    );
   }
-  return undefined;
+  return <span style={{ color: '#52c41a', fontWeight: 500 }}>{value}</span>;
 };
 
 // ════════════════════════════════════════════
@@ -89,6 +109,8 @@ const InvoiceDetail: React.FC = () => {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectComment, setRejectComment] = useState('');
+  const [submitModalOpen, setSubmitModalOpen] = useState(false);
+  const [submitComment, setSubmitComment] = useState('');
 
   // ─── Data Fetching ───
   const { data: invoice, isLoading, isError, error } = useQuery({
@@ -99,9 +121,11 @@ const InvoiceDetail: React.FC = () => {
 
   // ─── Mutations ───
   const submitMutation = useMutation({
-    mutationFn: () => invoiceService.submitInvoice(id!),
+    mutationFn: (comment?: string) => invoiceService.submitInvoice(id!, comment),
     onSuccess: () => {
       message.success('Hóa đơn đã được gửi duyệt!');
+      setSubmitModalOpen(false);
+      setSubmitComment('');
       queryClient.invalidateQueries({ queryKey: ['invoice-detail', id] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
     },
@@ -147,6 +171,7 @@ const InvoiceDetail: React.FC = () => {
   // ─── Workflow buttons ───
   const renderWorkflowActions = () => {
     const actions: React.ReactNode[] = [];
+    const isYellow = invoice.riskLevel === 'Yellow';
 
     if (invoice.status === 'Draft') {
       actions.push(
@@ -155,18 +180,25 @@ const InvoiceDetail: React.FC = () => {
           type="primary"
           icon={<SendOutlined />}
           onClick={() => {
-            Modal.confirm({
-              title: 'Gửi duyệt hóa đơn?',
-              content: 'Hóa đơn sẽ chuyển sang trạng thái "Chờ duyệt" và chờ Admin phê duyệt.',
-              okText: 'Gửi duyệt',
-              cancelText: 'Hủy',
-              onOk: () => submitMutation.mutate(),
-            });
+            if (isYellow) {
+              // Yellow: show dedicated modal requiring giải trình
+              setSubmitComment('');
+              setSubmitModalOpen(true);
+            } else {
+              // Green: simple confirm, no comment needed
+              Modal.confirm({
+                title: 'Gửi duyệt hóa đơn?',
+                content: 'Hóa đơn sẽ chuyển sang trạng thái "Chờ duyệt" và chờ Admin phê duyệt.',
+                okText: 'Gửi duyệt',
+                cancelText: 'Hủy',
+                onOk: () => submitMutation.mutate(undefined),
+              });
+            }
           }}
           loading={submitMutation.isPending}
-          style={{ borderRadius: 10, fontWeight: 600, height: 40, background: '#13c2c2', borderColor: '#13c2c2' }}
+          style={{ borderRadius: 10, fontWeight: 600, height: 40, background: 'linear-gradient(135deg, #4880FF, #6C5CE7)', border: 'none', boxShadow: '0 2px 8px rgba(72,128,255,0.35)' }}
         >
-          Gửi duyệt
+          {isYellow ? '⚠️ Gửi duyệt + Giải trình' : 'Gửi duyệt'}
         </Button>
       );
     }
@@ -206,6 +238,11 @@ const InvoiceDetail: React.FC = () => {
     return actions.length > 0 ? <Space>{actions}</Space> : null;
   };
 
+  // ─── Computed values (fallback for Mẫu 2 invoices without explicit totals) ───
+  const getLineItemTotal = (item: LineItemDto) => item.totalAmount || (item.quantity * item.unitPrice) || 0;
+  const computedTotalBeforeTax = invoice.totalAmountBeforeTax || invoice.lineItems.reduce((sum, item) => sum + getLineItemTotal(item), 0) || invoice.totalAmount;
+  const computedTotalTax = invoice.totalTaxAmount || (invoice.totalAmount - (computedTotalBeforeTax || 0));
+
   // ─── Line Items Table ───
   const lineItemColumns = [
     { title: 'STT', dataIndex: 'lineNumber', key: 'lineNumber', width: 60, align: 'center' as const },
@@ -221,13 +258,14 @@ const InvoiceDetail: React.FC = () => {
     },
     {
       title: 'Thành tiền', dataIndex: 'totalAmount', key: 'totalAmount', width: 140, align: 'right' as const,
-      render: (v: number) => <Text strong>{formatCurrency(v, invoice.invoiceCurrency)}</Text>,
+      render: (_v: number, record: LineItemDto) => <Text strong>{formatCurrency(getLineItemTotal(record), invoice.invoiceCurrency)}</Text>,
     },
     { title: 'Thuế suất', dataIndex: 'vatRate', key: 'vatRate', width: 90, align: 'center' as const, render: (v: number) => `${v}%` },
     {
       title: 'Tiền thuế', dataIndex: 'vatAmount', key: 'vatAmount', width: 130, align: 'right' as const,
       render: (v: number, record: LineItemDto) => {
-        const computed = v || (record.totalAmount && record.vatRate ? Math.round(record.totalAmount * record.vatRate / 100) : 0);
+        const lineTotal = getLineItemTotal(record);
+        const computed = v || (lineTotal && record.vatRate ? Math.round(lineTotal * record.vatRate / 100) : 0);
         return formatCurrency(computed, invoice.invoiceCurrency);
       },
     },
@@ -284,8 +322,8 @@ const InvoiceDetail: React.FC = () => {
           {/* Amounts */}
           <Card size="small" title={<span><DollarOutlined /> Số tiền</span>} bordered={false} style={{ marginBottom: 16, borderRadius: 12, background: '#f0f9ff' }}>
             <Row gutter={24}>
-              <Col xs={8}><InfoItem label="Tiền trước thuế" value={formatCurrency(invoice.totalAmountBeforeTax, invoice.invoiceCurrency)} /></Col>
-              <Col xs={8}><InfoItem label="Tiền thuế" value={formatCurrency(invoice.totalTaxAmount, invoice.invoiceCurrency)} /></Col>
+              <Col xs={8}><InfoItem label="Tiền trước thuế" value={formatCurrency(computedTotalBeforeTax, invoice.invoiceCurrency)} /></Col>
+              <Col xs={8}><InfoItem label="Tiền thuế" value={formatCurrency(computedTotalTax, invoice.invoiceCurrency)} /></Col>
               <Col xs={8}>
                 <div style={{ marginBottom: 12 }}>
                   <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 2 }}>Tổng tiền thanh toán</Text>
@@ -326,9 +364,9 @@ const InvoiceDetail: React.FC = () => {
             <Table.Summary fixed>
               <Table.Summary.Row>
                 <Table.Summary.Cell index={0} colSpan={5} align="right"><Text strong>Tổng cộng:</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={5} align="right"><Text strong>{formatCurrency(invoice.totalAmountBeforeTax, invoice.invoiceCurrency)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={5} align="right"><Text strong>{formatCurrency(computedTotalBeforeTax, invoice.invoiceCurrency)}</Text></Table.Summary.Cell>
                 <Table.Summary.Cell index={6} />
-                <Table.Summary.Cell index={7} align="right"><Text strong>{formatCurrency(invoice.totalTaxAmount, invoice.invoiceCurrency)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={7} align="right"><Text strong>{formatCurrency(computedTotalTax, invoice.invoiceCurrency)}</Text></Table.Summary.Cell>
               </Table.Summary.Row>
             </Table.Summary>
           )}
@@ -374,7 +412,7 @@ const InvoiceDetail: React.FC = () => {
               size="small"
               style={{
                 marginBottom: 12, borderRadius: 10,
-                borderLeft: `4px solid ${check.riskLevel === 'Green' ? '#52c41a' : check.riskLevel === 'Yellow' ? '#faad14' : check.riskLevel === 'Orange' ? '#fa8c16' : '#ff4d4f'}`,
+                borderLeft: `4px solid ${check.riskLevel === 'Green' ? '#52c41a' : check.riskLevel === 'Yellow' ? '#faad14' : '#ff4d4f'}`,
               }}
             >
               <Row justify="space-between" align="middle">
@@ -432,11 +470,16 @@ const InvoiceDetail: React.FC = () => {
                       const oldVal = c.old_value != null && c.old_value !== '' ? String(c.old_value) : null;
                       const newVal = c.new_value != null && c.new_value !== '' ? String(c.new_value) : null;
                       return (
-                        <div key={idx} style={{ fontSize: 12 }}>
-                          <Text code>{c.field}</Text>:{' '}
-                          {oldVal && <><Text delete type="secondary">{oldVal}</Text>{' → '}</>}
-                          {!oldVal && newVal && <>{' → '}</>}
-                          <Text style={{ color: changeValueColor(c.field, newVal || '') || '#52c41a', fontWeight: 500 }}>{newVal || 'Không có'}</Text>
+                        <div key={idx} style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>
+                          <strong>{c.field}</strong>:{' '}
+                          {oldVal && (
+                            <span style={{ textDecoration: 'line-through', color: '#94a3b8', marginRight: 6 }}>
+                              {oldVal}
+                            </span>
+                          )}
+                          {oldVal && <span style={{ color: '#94a3b8', marginRight: 6 }}>→</span>}
+                          {!oldVal && newVal && <span style={{ color: '#94a3b8', marginRight: 6 }}>→</span>}
+                          {newVal ? <ChangeValueBadge field={c.field} value={newVal} /> : <span style={{ color: '#94a3b8' }}>Không có</span>}
                         </div>
                       );
                     })}
@@ -480,6 +523,31 @@ const InvoiceDetail: React.FC = () => {
       <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash" bodyStyle={{ padding: '16px 24px' }}>
         <Tabs defaultActiveKey="info" items={tabItems} />
       </Card>
+
+      {/* Submit with giải trình Modal - for Yellow invoices */}
+      <Modal
+        title={<Space><WarningOutlined style={{ color: '#faad14' }} /><span>Gửi duyệt hóa đơn cảnh báo (Yellow)</span></Space>}
+        open={submitModalOpen}
+        onCancel={() => setSubmitModalOpen(false)}
+        onOk={() => submitMutation.mutate(submitComment || undefined)}
+        okText="Xác nhận gửi duyệt"
+        cancelText="Hủy"
+        okButtonProps={{ loading: submitMutation.isPending }}
+      >
+        <Alert
+          message={`Hóa đơn này có rủi ro <Yellow> — cần giải trình để Admin xét duyệt.`}
+          type="warning" showIcon style={{ marginBottom: 16 }}
+        />
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>Lý do giải trình <Text type="secondary">(có thể bỏ trống)</Text></Text>
+        <TextArea
+          rows={4}
+          value={submitComment}
+          onChange={e => setSubmitComment(e.target.value)}
+          placeholder="Ví dụ: Hóa đơn đổ xăng công tác, cây xăng không xuất hoá đơn có MST người mua..."
+          maxLength={500}
+          showCount
+        />
+      </Modal>
 
       {/* Reject Modal */}
       <Modal
