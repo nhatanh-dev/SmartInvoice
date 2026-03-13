@@ -397,5 +397,21 @@ namespace SmartInvoice.API.Controller
                 return StatusCode(500, new { Message = ex.Message });
             }
         }
+
+        [HttpGet("stats")]
+        [Authorize(Policy = Constants.Permissions.InvoiceView)]
+        public async Task<IActionResult> GetInvoiceStats([FromQuery] DateTime startDate, [FromQuery] DateTime endDate, [FromQuery] string? status)
+        {
+            try
+            {
+                var (_, companyId, _, _) = GetUserInfo();
+                var stats = await _invoiceService.GetInvoiceStatsAsync(startDate, endDate, status, companyId);
+                return Ok(stats);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+        }
     }
 }

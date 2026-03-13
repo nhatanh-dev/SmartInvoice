@@ -34,6 +34,7 @@ public class AppDbContext : DbContext
     public DbSet<InvoiceAuditLog> InvoiceAuditLogs { get; set; }
     public DbSet<Notification> Notifications { get; set; }
     public DbSet<ExportHistory> ExportHistories { get; set; }
+    public DbSet<ExportConfig> ExportConfigs { get; set; }
     public DbSet<AIProcessingLog> AIProcessingLogs { get; set; }
     public DbSet<SystemConfiguration> SystemConfigurations { get; set; }
     public DbSet<SubscriptionPackage> SubscriptionPackages { get; set; }
@@ -210,6 +211,17 @@ public class AppDbContext : DbContext
 
         // Global Query Filter for LocalBlacklist
         modelBuilder.Entity<LocalBlacklistedCompany>().HasQueryFilter(b => b.IsActive);
+
+        // ExportConfig: 1 Company - 1 ExportConfig
+        modelBuilder.Entity<ExportConfig>()
+            .HasOne(ec => ec.Company)
+            .WithOne()
+            .HasForeignKey<ExportConfig>(ec => ec.CompanyId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ExportConfig>()
+            .HasIndex(ec => ec.CompanyId)
+            .IsUnique();
 
         // =================================================================================
         // 5. VALUE CONVERTERS
