@@ -48,6 +48,11 @@ public class Company : ISoftDelete
     [MaxLength(50)]
     public string SubscriptionTier { get; set; } = "Free"; // Free, Starter, Professional, Enterprise
 
+    public bool RequireTwoStepApproval { get; set; } = false;
+    
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal? TwoStepApprovalThreshold { get; set; } = 20000000;
+
     [MaxLength(20)]
     public string BillingCycle { get; set; } = "Monthly"; // Monthly, SemiAnnual, Annual
 

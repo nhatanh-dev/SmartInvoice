@@ -368,9 +368,6 @@ namespace SmartInvoice.API.Services.Implementations
 
         public async Task ApproveInvoiceAsync(Guid invoiceId, Guid companyId, Guid userId, string userEmail, string userRole, string? comment, string? ipAddress)
         {
-            if (userRole != "CompanyAdmin" && userRole != "SuperAdmin")
-                throw new UnauthorizedAccessException("Chỉ Admin mới có quyền duyệt hóa đơn.");
-
             _logger?.LogInformation("ApproveInvoiceAsync called for {InvoiceId} by user {UserId}", invoiceId, userId);
 
             var invoice = await _unitOfWork.Invoices.GetByIdAsync(invoiceId);
@@ -381,12 +378,65 @@ namespace SmartInvoice.API.Services.Implementations
             if (invoice.Status != "Pending")
                 throw new InvalidOperationException($"Chỉ có thể duyệt hóa đơn ở trạng thái Chờ duyệt. Trạng thái hiện tại: {invoice.Status}");
 
-            var oldStatus = invoice.Status;
-            invoice.Status = "Approved";
-            invoice.Workflow.ApprovedBy = userId;
-            invoice.Workflow.ApprovedAt = DateTime.UtcNow;
-            invoice.UpdatedAt = DateTime.UtcNow;
+            var company = await _unitOfWork.Companies.GetByIdAsync(companyId);
+            bool isPremiumTier = company.SubscriptionTier == "Professional" || company.SubscriptionTier == "Enterprise";
+            bool needsTwoStep = isPremiumTier && company.RequireTwoStepApproval && invoice.TotalAmount >= (company.TwoStepApprovalThreshold ?? 0);
 
+            var oldStatus = invoice.Status;
+            var auditAction = "APPROVE";
+            var auditMsg = comment ?? "Đã duyệt hóa đơn.";
+
+            if (needsTwoStep)
+            {
+                if (invoice.Workflow.CurrentApprovalStep == 1)
+                {
+                    // --- LẦN DUYỆT 1 ---
+                    invoice.Workflow.Level1ApprovedBy = userId;
+                    invoice.Workflow.Level1ApprovedAt = DateTime.UtcNow;
+                    invoice.Workflow.CurrentApprovalStep = 2; 
+                    // Status vẫn giữ là Pending để đợi người thứ 2 duyệt
+                    
+                    auditAction = "APPROVE_LEVEL_1";
+                    auditMsg = "Đã duyệt Cấp 1. Đang chờ phê duyệt Cấp 2.";
+                }
+                else if (invoice.Workflow.CurrentApprovalStep == 2)
+                {
+                    // --- LẦN DUYỆT 2 ---
+                    
+                    // Ràng buộc 1: KIỂM TRA CHÉO (Bắt buộc 2 người khác nhau, vô hiệu hóa tự biên tự diễn)
+                    if (invoice.Workflow.Level1ApprovedBy == userId)
+                    {
+                        throw new InvalidOperationException("Bạn đã duyệt Cấp 1 rồi. Hóa đơn này cần một người khác để phê duyệt Cấp 2 (Cross-check).");
+                    }
+
+                    // Ràng buộc 2: KIỂM SOÁT CẤP BẬC (Chỉ có Sếp mới được chốt sổ)
+                    if (userRole != "ChiefAccountant" && userRole != "CompanyAdmin" && userRole != "SuperAdmin")
+                    {
+                        throw new InvalidOperationException("Chỉ có Kế toán trưởng hoặc Giám đốc mới có quyền phê duyệt hóa đơn Cấp 2.");
+                    }
+
+                    // Qua được 2 ải bảo mật -> Chốt duyệt
+                    invoice.Workflow.Level2ApprovedBy = userId;
+                    invoice.Workflow.Level2ApprovedAt = DateTime.UtcNow;
+                    
+                    // Chính thức Approved
+                    invoice.Status = "Approved";
+                    invoice.Workflow.ApprovedBy = userId;
+                    invoice.Workflow.ApprovedAt = DateTime.UtcNow;
+
+                    auditAction = "APPROVE_LEVEL_2";
+                    auditMsg = "Đã duyệt Cấp 2. Hoàn tất phê duyệt.";
+                }
+            }
+            else
+            {
+                // --- QUY TRÌNH 1 CẤP (Công ty gói Cơ bản hoặc hóa đơn dưới hạn mức) ---
+                invoice.Status = "Approved";
+                invoice.Workflow.ApprovedBy = userId;
+                invoice.Workflow.ApprovedAt = DateTime.UtcNow;
+            }
+
+            invoice.UpdatedAt = DateTime.UtcNow;
             _unitOfWork.Invoices.Update(invoice);
 
             await _unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
@@ -396,18 +446,18 @@ namespace SmartInvoice.API.Services.Implementations
                 UserId = userId,
                 UserEmail = userEmail,
                 UserRole = userRole,
-                Action = "APPROVE",
+                Action = auditAction,
                 Changes = new List<AuditChange>
                 {
-                    new() { Field = "Status", OldValue = oldStatus, NewValue = "Approved", ChangeType = "UPDATE" }
+                    new() { Field = "Status", OldValue = oldStatus, NewValue = invoice.Status, ChangeType = "UPDATE" }
                 },
-                Comment = comment,
+                Comment = auditMsg,
                 IpAddress = ipAddress,
                 CreatedAt = DateTime.UtcNow
             });
 
             await _unitOfWork.CompleteAsync();
-            _logger?.LogInformation("Approved invoice {InvoiceId}", invoiceId);
+            _logger?.LogInformation("Approved invoice {InvoiceId} (Step: {Step})", invoiceId, invoice.Workflow.CurrentApprovalStep);
         }
 
         // ════════════════════════════════════════════

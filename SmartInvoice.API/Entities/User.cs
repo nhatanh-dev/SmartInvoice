@@ -34,7 +34,7 @@ public class User : ISoftDelete
 
     // --- Authorization ---
     [MaxLength(50)]
-    public string Role { get; set; } = UserRole.Member.ToString(); // Re-adding Role as string since we removed AspNetRoles
+    public string Role { get; set; } = UserRole.Accountant.ToString(); // Re-adding Role as string since we removed AspNetRoles
 
     [Column(TypeName = "jsonb")]
     public List<string>? Permissions { get; set; } = new();

@@ -157,6 +157,13 @@ public class InvoiceWorkflow
     [ForeignKey(nameof(SubmittedBy))] public User? Submitter { get; set; }
     public DateTime? SubmittedAt { get; set; }
 
+    public Guid? Level1ApprovedBy { get; set; }
+    [ForeignKey(nameof(Level1ApprovedBy))] public User? Level1Approver { get; set; }
+    public DateTime? Level1ApprovedAt { get; set; }
+    public Guid? Level2ApprovedBy { get; set; }
+    [ForeignKey(nameof(Level2ApprovedBy))] public User? Level2Approver { get; set; }
+    public DateTime? Level2ApprovedAt { get; set; }
+    public int CurrentApprovalStep { get; set; } = 1;
     public Guid? ApprovedBy { get; set; }
     [ForeignKey(nameof(ApprovedBy))] public User? Approver { get; set; }
     public DateTime? ApprovedAt { get; set; }
