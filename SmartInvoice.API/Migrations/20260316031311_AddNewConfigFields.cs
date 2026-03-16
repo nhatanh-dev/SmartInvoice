@@ -5,7 +5,7 @@
 namespace SmartInvoice.API.Migrations
 {
     /// <inheritdoc />
-    public partial class AddConfigurationFields : Migration
+    public partial class AddNewConfigFields : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -24,6 +24,7 @@ namespace SmartInvoice.API.Migrations
                 nullable: false,
                 defaultValue: false);
 
+            // Thêm cột cho bảng Companies
             migrationBuilder.AddColumn<decimal>(
                 name: "AutoApproveThreshold",
                 table: "Companies",
