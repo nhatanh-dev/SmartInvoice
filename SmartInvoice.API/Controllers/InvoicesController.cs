@@ -224,6 +224,26 @@ namespace SmartInvoice.API.Controller
         //  CRUD
         // ════════════════════════════════════════════
 
+        [HttpGet("{id}/versions")]
+        [Authorize(Policy = Constants.Permissions.InvoiceView)]
+        public async Task<IActionResult> GetInvoiceVersions(Guid id)
+        {
+            try
+            {
+                var (userId, companyId, _, _) = GetUserInfo();
+                var versions = await _invoiceService.GetInvoiceVersionsAsync(id, companyId);
+                return Ok(versions);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+            }
+        }
+
         [HttpPut("{id}")]
         [Authorize(Policy = Constants.Permissions.InvoiceEdit)]
         public async Task<IActionResult> UpdateInvoice(Guid id, [FromBody] UpdateInvoiceDto request)

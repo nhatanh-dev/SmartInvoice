@@ -20,6 +20,11 @@ public class InvoiceDetailDto
     public decimal ExchangeRate { get; set; }
     public string? MCCQT { get; set; }
 
+    // ─── Versioning ───
+    public int Version { get; set; }
+    public bool? IsReplaced { get; set; }
+    public Guid? ReplacedBy { get; set; }
+
     // ─── Invoice Dossier ───
     /// <summary>True if the invoice has an XML original file (OriginalFileId is set).</summary>
     public bool HasOriginalFile { get; set; }

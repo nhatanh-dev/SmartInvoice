@@ -22,6 +22,7 @@ import {
   Col,
   message,
   Alert,
+  Dropdown,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -41,9 +42,10 @@ import {
   BankOutlined,
   CloudUploadOutlined,
   LinkOutlined,
+  DownOutlined,
 } from "@ant-design/icons";
 import StatusBadge from "../components/ui/StatusBadge";
-import { ValidationProgressIndicator } from "../components/ui/ValidationProgressIndicator";
+import BusinessValidationSummary from "../components/BusinessValidationSummary";
 import { useAutoRefreshValidation } from "../hooks/useAutoRefreshValidation";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -86,18 +88,7 @@ const formatCurrency = (
   return `${amount.toLocaleString("vi-VN")} ${currency === "VND" ? "₫" : currency}`;
 };
 
-const validationStatusIcon = (status: string) => {
-  switch (status) {
-    case "Pass":
-      return <CheckCircleOutlined style={{ color: "#52c41a" }} />;
-    case "Fail":
-      return <CloseCircleOutlined style={{ color: "#ff4d4f" }} />;
-    case "Warning":
-      return <WarningOutlined style={{ color: "#faad14" }} />;
-    default:
-      return <InfoCircleOutlined style={{ color: "#8c8c8c" }} />;
-  }
-};
+// Removed validationStatusIcon
 
 const actionColorMap: Record<string, string> = {
   UPLOAD: "#1677ff",
@@ -194,6 +185,15 @@ const InvoiceDetail: React.FC = () => {
   } = useQuery({
     queryKey: ["invoice-detail", id],
     queryFn: () => invoiceService.getInvoiceDetail(id!),
+    enabled: !!id,
+  });
+
+  const {
+    data: versions,
+    isLoading: isVersionsLoading
+  } = useQuery({
+    queryKey: ["invoice-versions", id],
+    queryFn: () => invoiceService.getInvoiceVersions(id!),
     enabled: !!id,
   });
 
@@ -473,6 +473,78 @@ const InvoiceDetail: React.FC = () => {
     },
   ];
 
+  // ─── Map Data for BusinessValidationSummary ───
+  // DB stores PascalCase (ErrorCode, ErrorMessage, Suggestion) but
+  // BusinessValidationSummary expects camelCase (errorCode, errorMessage, suggestion).
+  const normalizeItem = (item: any) => ({
+    errorCode: item.ErrorCode || item.errorCode || null,
+    errorMessage: item.ErrorMessage || item.errorMessage || null,
+    suggestion: item.Suggestion || item.suggestion || null,
+  });
+
+  let allErrors: any[] = [];
+  let allWarnings: any[] = [];
+  let fallbackErrors: string[] = [];
+
+  // Parse from RiskChecks
+  invoice.riskChecks?.forEach((check: any) => {
+    try {
+      if (check.checkDetails) {
+        const parsed = JSON.parse(check.checkDetails);
+        const errs = parsed.ErrorDetails || parsed.Errors || [];
+        const warns = parsed.WarningDetails || parsed.Warnings || [];
+        allErrors = [...allErrors, ...errs.map(normalizeItem)];
+        allWarnings = [...allWarnings, ...warns.map(normalizeItem)];
+      }
+    } catch (e) {
+      console.error("Failed to parse checkDetails", e);
+    }
+
+    if (check.errorMessage && check.checkStatus === "ERROR") {
+      fallbackErrors.push(check.errorMessage);
+    }
+  });
+
+  // Parse from ValidationLayers
+  invoice.validationLayers?.forEach((layer: any) => {
+    try {
+      if (layer.errorDetails) {
+        const parsed = JSON.parse(layer.errorDetails);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.map(normalizeItem);
+          if (layer.validationStatus === "Warning") {
+             allWarnings = [...allWarnings, ...normalized];
+          } else {
+             allErrors = [...allErrors, ...normalized];
+          }
+        }
+      }
+    } catch (e) {
+       console.error("Failed to parse errorDetails", e);
+    }
+
+    if ((layer.errorCode || layer.errorMessage) && (!layer.errorDetails || layer.errorDetails.trim() === "")) {
+      const obj = {
+          errorCode: layer.errorCode,
+          errorMessage: layer.errorMessage,
+          suggestion: layer.suggestion
+      };
+      if (layer.validationStatus === "Warning") allWarnings.push(obj);
+      else if (layer.validationStatus !== "Pass") allErrors.push(obj);
+    }
+  });
+
+  const mappedValidationResult = {
+    extractedData: {
+      total_pre_tax: invoice.totalAmountBeforeTax,
+      total_tax_amount: invoice.totalTaxAmount,
+      total_amount: invoice.totalAmount,
+    },
+    errorDetails: allErrors,
+    warningDetails: allWarnings,
+    errors: fallbackErrors
+  };
+
   // ─── Tabs ───
   const tabItems = [
     {
@@ -484,6 +556,27 @@ const InvoiceDetail: React.FC = () => {
       ),
       children: (
         <div>
+          {/* Outdated Version Banner */}
+          {invoice.isReplaced && invoice.replacedBy && (
+            <Alert
+              message="Hóa đơn này đã có phiên bản mới hơn"
+              description={
+                <span>
+                  Hệ thống đã ghi nhận một tệp tải lên mới khắc phục lỗi cho hóa đơn này. Dữ liệu hiện tại chỉ mang tính chất lưu vết.{' '}
+                  <a
+                    onClick={() => navigate(`/app/invoices/${invoice.replacedBy}`)}
+                    style={{ fontWeight: 600, textDecoration: 'underline' }}
+                  >
+                    Xem phiên bản mới nhất →
+                  </a>
+                </span>
+              }
+              type="error"
+              showIcon
+              style={{ marginBottom: 16, borderRadius: 10, border: '1px solid #ffccc7' }}
+            />
+          )}
+
           {/* ═══ Invoice Dossier Status Banner ═══ */}
           {invoice.hasOriginalFile && invoice.hasVisualFile && (
             <Alert
@@ -717,7 +810,16 @@ const InvoiceDetail: React.FC = () => {
               />
             )}
             {invoice.notes && (
-              <InfoItem label="Ghi chú" value={invoice.notes} />
+              <div style={{ marginTop: 16 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Ghi chú hệ thống</Typography.Text>
+                <div style={{ background: "#f6f8fa", padding: "8px 12px", borderRadius: 8, fontSize: 13, border: "1px solid #e2e8f0" }}>
+                  {invoice.notes.split('---').filter(p => p.trim()).map((part: string, index: number, arr) => (
+                    <div key={index} style={{ marginBottom: index !== arr.length - 1 ? 4 : 0 }}>
+                      {part.trim()}
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </Card>
         </div>
@@ -765,319 +867,15 @@ const InvoiceDetail: React.FC = () => {
       ),
     },
     {
-      key: "validation",
+      key: "validation_summary",
       label: (
         <span>
-          <SafetyCertificateOutlined /> Kiểm tra (
-          {invoice.validationLayers.length})
+          <SafetyCertificateOutlined /> Kết quả kiểm tra
         </span>
       ),
       children: (
-        <div>
-          <ValidationProgressIndicator
-            isValidating={isRefreshing}
-            lastUpdateTime={lastRefreshTime}
-          />
-          {invoice.validationLayers.map((layer) => {
-            let parsedDetails: any[] = [];
-            if (layer.errorDetails) {
-              try {
-                parsedDetails = JSON.parse(layer.errorDetails);
-              } catch {
-                // Ignore parsing errors, will fallback to raw display or nothing
-              }
-            }
-            return (
-              <Card
-                key={layer.layerName}
-                size="small"
-                style={{
-                  marginBottom: 12,
-                  borderRadius: 10,
-                  borderLeft: `4px solid ${layer.validationStatus === "Warning" ? "#faad14" : layer.isValid ? "#52c41a" : "#ff4d4f"}`,
-                }}
-              >
-                <Space>
-                  {validationStatusIcon(layer.validationStatus)}
-                  <Text strong>
-                    Layer {layer.layerOrder}: {layer.layerName}
-                  </Text>
-                  <Tag
-                    color={
-                      layer.validationStatus === "Warning"
-                        ? "warning"
-                        : layer.isValid
-                          ? "success"
-                          : "error"
-                    }
-                  >
-                    {layer.validationStatus}
-                  </Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(layer.checkedAt).format("DD/MM/YYYY HH:mm")}
-                  </Text>
-                </Space>
-                {/* Single error code / message from API straight */}
-                {(layer.errorCode || layer.errorMessage) &&
-                  !parsedDetails.length && (
-                    <div style={{ marginTop: 8 }}>
-                      {layer.errorCode && (
-                        <Tag color="error">{layer.errorCode}</Tag>
-                      )}
-                      <Text type="danger" style={{ fontSize: 13 }}>
-                        {layer.errorMessage || layer.errorDetails}
-                      </Text>
-                    </div>
-                  )}
-
-                {/* Displaying parsed details */}
-                {parsedDetails.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    {parsedDetails.map((err, idx) => (
-                      <div
-                        key={idx}
-                        style={{
-                          marginBottom: 8,
-                          padding: 8,
-                          background:
-                            layer.validationStatus === "Warning"
-                              ? "#fffbe6"
-                              : "#fff2f0",
-                          borderRadius: 6,
-                        }}
-                      >
-                        <Space align="start">
-                          <CloseCircleOutlined
-                            style={{
-                              color:
-                                layer.validationStatus === "Warning"
-                                  ? "#faad14"
-                                  : "#ff4d4f",
-                              marginTop: 4,
-                            }}
-                          />
-                          <div>
-                            {err.ErrorCode && (
-                              <Tag
-                                color={
-                                  layer.validationStatus === "Warning"
-                                    ? "warning"
-                                    : "error"
-                                }
-                                style={{ marginBottom: 4 }}
-                              >
-                                {err.ErrorCode}
-                              </Tag>
-                            )}
-                            <Text
-                              type={
-                                layer.validationStatus === "Warning"
-                                  ? "warning"
-                                  : "danger"
-                              }
-                              style={{ fontSize: 13, display: "block" }}
-                            >
-                              {err.ErrorMessage}
-                            </Text>
-                            {err.Suggestion && (
-                              <Text
-                                type="secondary"
-                                italic
-                                style={{
-                                  fontSize: 13,
-                                  display: "block",
-                                  marginTop: 2,
-                                }}
-                              >
-                                Gợi ý: {err.Suggestion}
-                              </Text>
-                            )}
-                          </div>
-                        </Space>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Layer Data payload if available */}
-                {layer.layerData && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      padding: 8,
-                      backgroundColor: "#fafafa",
-                      borderRadius: 4,
-                    }}
-                  >
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      Dữ liệu kiểm tra: {layer.layerData}
-                    </Text>
-                  </div>
-                )}
-              </Card>
-            );
-          })}
-          {invoice.validationLayers.length === 0 && (
-            <Text type="secondary">Chưa có kết quả kiểm tra.</Text>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "risk",
-      label: (
-        <span>
-          <WarningOutlined /> Rủi ro (
-          {invoice.riskChecks.filter((c) => c.checkStatus === "WARNING").length}
-          )
-        </span>
-      ),
-      children: (
-        <div>
-          {invoice.riskChecks.map((check, idx) => (
-            <Card
-              key={idx}
-              size="small"
-              style={{
-                marginBottom: 12,
-                borderRadius: 10,
-                borderLeft: `4px solid ${check.riskLevel === "Green" ? "#52c41a" : check.riskLevel === "Yellow" ? "#faad14" : "#ff4d4f"}`,
-              }}
-            >
-              <Row justify="space-between" align="middle">
-                <Col>
-                  <Space>
-                    <Text strong>{check.checkType}</Text>
-                    <Tag
-                      color={
-                        check.checkStatus === "PASS"
-                          ? "success"
-                          : check.checkStatus === "WARNING"
-                            ? "warning"
-                            : "error"
-                      }
-                    >
-                      {check.checkStatus}
-                    </Tag>
-                    <StatusBadge type="risk" value={check.riskLevel} />
-                  </Space>
-                </Col>
-                <Col>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(check.checkedAt).format("DD/MM/YYYY HH:mm")}
-                  </Text>
-                </Col>
-              </Row>
-              {check.errorMessage && (
-                <div style={{ marginTop: 8 }}>
-                  <Text type="danger">{check.errorMessage}</Text>
-                </div>
-              )}
-              {check.checkDetails &&
-                (() => {
-                  try {
-                    const details = JSON.parse(check.checkDetails);
-                    // Read from the new structure: ErrorDetails and WarningDetails
-                    const warnings: any[] =
-                      details.WarningDetails || details.Warnings || [];
-                    const errors: any[] =
-                      details.ErrorDetails || details.Errors || [];
-                    return (
-                      <>
-                        {errors.map((err, i) => (
-                          <div
-                            key={`e${i}`}
-                            style={{
-                              marginTop: i === 0 ? 8 : 4,
-                              padding: 8,
-                              background: "#fff2f0",
-                              borderRadius: 6,
-                            }}
-                          >
-                            {err.ErrorCode && (
-                              <Tag color="error" style={{ marginBottom: 4 }}>
-                                {err.ErrorCode}
-                              </Tag>
-                            )}
-                            <Text
-                              type="danger"
-                              style={{ fontSize: 13, display: "block" }}
-                            >
-                              {err.ErrorMessage || err}
-                            </Text>
-                            {err.Suggestion && (
-                              <Text
-                                type="secondary"
-                                italic
-                                style={{
-                                  fontSize: 12,
-                                  display: "block",
-                                  marginTop: 4,
-                                }}
-                              >
-                                {err.Suggestion}
-                              </Text>
-                            )}
-                          </div>
-                        ))}
-                        {warnings.map((err, i) => (
-                          <div
-                            key={`w${i}`}
-                            style={{
-                              marginTop: i === 0 && errors.length === 0 ? 8 : 4,
-                              padding: 8,
-                              background: "#fffbe6",
-                              borderRadius: 6,
-                            }}
-                          >
-                            {err.ErrorCode && (
-                              <Tag color="warning" style={{ marginBottom: 4 }}>
-                                {err.ErrorCode}
-                              </Tag>
-                            )}
-                            <Text
-                              style={{
-                                fontSize: 13,
-                                color: "#faad14",
-                                display: "block",
-                              }}
-                            >
-                              {err.ErrorMessage || err}
-                            </Text>
-                            {err.Suggestion && (
-                              <Text
-                                type="secondary"
-                                italic
-                                style={{
-                                  fontSize: 12,
-                                  display: "block",
-                                  marginTop: 4,
-                                }}
-                              >
-                                {err.Suggestion}
-                              </Text>
-                            )}
-                          </div>
-                        ))}
-                      </>
-                    );
-                  } catch {
-                    return null;
-                  }
-                })()}
-              {check.suggestion && (
-                <div style={{ marginTop: 4 }}>
-                  <Text type="secondary" italic>
-                    Chung: {check.suggestion}
-                  </Text>
-                </div>
-              )}
-            </Card>
-          ))}
-          {invoice.riskChecks.filter((c) => c.checkStatus === "WARNING")
-            .length === 0 && (
-            <Text type="secondary">Không phát hiện rủi ro nào.</Text>
-          )}
+        <div className="animate-fade-in-up">
+          <BusinessValidationSummary result={mappedValidationResult} />
         </div>
       ),
     },
@@ -1222,6 +1020,38 @@ const InvoiceDetail: React.FC = () => {
                 </Text>
               )}
             </Title>
+            {versions && versions.length > 0 ? (
+               <Dropdown
+                 menu={{
+                   items: versions.map(v => ({
+                     key: v.invoiceId,
+                     label: (
+                       <Space>
+                         <span>Phiên bản {v.version}</span>
+                         <Text type="secondary" style={{ fontSize: 12 }}>
+                           — {dayjs(v.createdAt).format('DD/MM/YYYY HH:mm')}
+                         </Text>
+                         {v.invoiceId === id && <Tag color="blue" bordered={false}>Hiện tại</Tag>}
+                       </Space>
+                     ),
+                     onClick: () => {
+                       if (v.invoiceId !== id) {
+                         navigate(`/app/invoices/${v.invoiceId}`);
+                       }
+                     }
+                   }))
+                 }}
+                 trigger={['click']}
+               >
+                 <Button size="small" style={{ borderRadius: 12, padding: '2px 10px', fontSize: 13, borderColor: '#d9d9d9', color: '#1677ff' }}>
+                   Phiên bản {invoice.version || 1} <DownOutlined />
+                 </Button>
+               </Dropdown>
+            ) : (
+                <Tag color="purple" style={{ borderRadius: 12, padding: '2px 10px', fontSize: 13, border: 'none' }}>
+                  Phiên bản {invoice.version || 1}
+                </Tag>
+            )}
             <StatusBadge
               type="status"
               value={invoice.status}

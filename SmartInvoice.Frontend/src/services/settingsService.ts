@@ -6,13 +6,10 @@ export interface CompanySettings {
   taxCode: string;
   address?: string;
   phoneNumber?: string;
-  isAutoApproveEnabled: boolean;
-  autoApproveThreshold: number;
+  phoneNumber?: string;
 }
 
 export interface UpdateCompanySettings {
-  isAutoApproveEnabled: boolean;
-  autoApproveThreshold: number;
 }
 
 export interface UserProfileSettings {

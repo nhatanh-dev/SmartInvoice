@@ -59,6 +59,55 @@ namespace SmartInvoice.API.Services.Implementations
             return MapToDetailDto(invoice);
         }
 
+        public async Task<List<InvoiceVersionDto>> GetInvoiceVersionsAsync(Guid invoiceId, Guid companyId)
+        {
+            var targetInvoice = await _unitOfWork.Invoices.GetInvoiceWithDetailsAsync(invoiceId);
+            if (targetInvoice == null || targetInvoice.CompanyId != companyId)
+            {
+                return new List<InvoiceVersionDto>();
+            }
+
+            var sellerTaxCode = targetInvoice.Seller?.TaxCode;
+            var invoiceNumber = targetInvoice.InvoiceNumber;
+            var serialNumber = targetInvoice.SerialNumber;
+
+            if (string.IsNullOrEmpty(sellerTaxCode) || string.IsNullOrEmpty(invoiceNumber))
+            {
+                // If it's a draft without those details, it shouldn't have versions
+                return new List<InvoiceVersionDto>
+                {
+                    new InvoiceVersionDto
+                    {
+                        InvoiceId = targetInvoice.InvoiceId,
+                        Version = targetInvoice.Version,
+                        Status = targetInvoice.Status,
+                        RiskLevel = targetInvoice.RiskLevel,
+                        CreatedAt = targetInvoice.CreatedAt
+                    }
+                };
+            }
+
+            var versions = await _unitOfWork.Invoices.FindAsync(i =>
+                i.CompanyId == companyId &&
+                i.Seller.TaxCode == sellerTaxCode &&
+                i.InvoiceNumber == invoiceNumber &&
+                i.SerialNumber == serialNumber &&
+                !i.IsDeleted
+            );
+
+            return versions
+                .OrderByDescending(v => v.Version)
+                .Select(v => new InvoiceVersionDto
+                {
+                    InvoiceId = v.InvoiceId,
+                    Version = v.Version,
+                    Status = v.Status,
+                    RiskLevel = v.RiskLevel,
+                    CreatedAt = v.CreatedAt
+                })
+                .ToList();
+        }
+
         public async Task<IEnumerable<Invoice>> GetAllInvoicesAsync()
         {
             return await _unitOfWork.Invoices.GetAllAsync();
@@ -72,7 +121,8 @@ namespace SmartInvoice.API.Services.Implementations
             var filteredQuery = query.Where(i => i.CompanyId == companyId
                                               && i.InvoiceDate >= startDate
                                               && i.InvoiceDate <= endDate
-                                              && i.IsDeleted != true).AsQueryable();
+                                              && !i.IsDeleted
+                                              && !i.IsReplaced).AsQueryable();
 
             if (!string.IsNullOrEmpty(statusFilter))
             {
@@ -525,6 +575,10 @@ namespace SmartInvoice.API.Services.Implementations
                 ExchangeRate = i.ExchangeRate,
                 MCCQT = i.MCCQT,
 
+                Version = i.Version,
+                IsReplaced = i.IsReplaced,
+                ReplacedBy = i.ReplacedBy,
+
                 HasOriginalFile = i.OriginalFileId != null && i.OriginalFileId != Guid.Empty,
                 HasVisualFile = i.VisualFileId != null,
 
@@ -920,17 +974,8 @@ namespace SmartInvoice.API.Services.Implementations
                 // ============================================================
                 var invoiceId = Guid.NewGuid();
 
-                var company = await _unitOfWork.Companies.GetByIdAsync(CompanyId);
-                bool isAutoApproveEnabled = company?.IsAutoApproveEnabled ?? false;
-                decimal autoApproveThreshold = company?.AutoApproveThreshold ?? 0;
-
-                bool canAutoApprove = isAutoApproveEnabled &&
-                                      isInvoiceValid &&
-                                      !finalResult.WarningDetails.Any() &&
-                                      (finalResult.ExtractedData?.TotalAmount ?? 0) <= autoApproveThreshold;
-
-                string initialStatus = canAutoApprove ? "Approved" : (isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Draft" : "Draft") : "Rejected");
-                string initialRiskLevel = canAutoApprove ? "Green" : (isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Yellow" : "Green") : "Red");
+                string initialStatus = isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Draft" : "Draft") : "Rejected";
+                string initialRiskLevel = isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Yellow" : "Green") : "Red";
 
                 // 2. Tạo Invoice
                 var invoice = new Invoice
@@ -981,9 +1026,9 @@ namespace SmartInvoice.API.Services.Implementations
 
                     Status = initialStatus,
                     RiskLevel = initialRiskLevel,
-                    Notes = canAutoApprove ? "Đã duyệt tự động theo cấu hình Công ty." : (isInvoiceValid
+                    Notes = isInvoiceValid
                         ? (finalResult.WarningDetails.Any() ? "Hóa đơn có cảnh báo, cần xem xét" : null)
-                        : "Hóa đơn có lỗi, cần kiểm tra lại"),
+                        : "Hóa đơn có lỗi, cần kiểm tra lại",
 
                     Version = finalResult.NewVersion,
 
@@ -991,7 +1036,7 @@ namespace SmartInvoice.API.Services.Implementations
                     {
                         UploadedBy = UserId,
                         ApprovedBy = null,
-                        ApprovedAt = canAutoApprove ? DateTime.UtcNow : null
+                        ApprovedAt = null
                     },
                     CreatedAt = DateTime.UtcNow
                 };
@@ -1118,17 +1163,6 @@ namespace SmartInvoice.API.Services.Implementations
                 await _unitOfWork.Invoices.AddAsync(invoice);
                 await _unitOfWork.CompleteAsync();
 
-                if (canAutoApprove)
-                {
-                    await _notificationService.SendNotificationAsync(
-                        userId: UserId,
-                        type: "System",
-                        title: "Hóa đơn tự động duyệt",
-                        message: $"Hóa đơn số {invoice.InvoiceNumber} đã được hệ thống tự động phê duyệt.",
-                        relatedInvoiceId: invoiceId,
-                        priority: "Normal"
-                    );
-                }
 
                 _logger?.LogInformation("Created new invoice {InvoiceId} from S3Key={S3Key}, RiskLevel={RiskLevel}", invoiceId, s3Key, invoice.RiskLevel);
 
@@ -1159,7 +1193,6 @@ namespace SmartInvoice.API.Services.Implementations
 
                 // Trả về invoiceId để frontend biết đây là record nào trong DB
                 finalResult.InvoiceId = invoiceId;
-                finalResult.IsAutoApproved = canAutoApprove;
 
                 return finalResult;
             }
