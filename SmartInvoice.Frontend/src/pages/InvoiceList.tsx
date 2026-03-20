@@ -179,6 +179,7 @@ const InvoiceList: React.FC = () => {
   const selectedInvoices = invoices.filter((inv: any) => selectedRowKeys.includes(inv.invoiceId));
   const allSelectedAreDraft = selectedInvoices.length > 0 && selectedInvoices.every((inv: any) => inv.status === 'Draft');
   const allSelectedAreDraftOrRejected = selectedInvoices.length > 0 && selectedInvoices.every((inv: any) => inv.status === 'Draft' || inv.status === 'Rejected');
+  const hasNonApprovedInSelected = selectedInvoices.length > 0 && selectedInvoices.some((inv: any) => inv.status !== 'Approved');
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -344,7 +345,11 @@ const InvoiceList: React.FC = () => {
         const isPending = st === 'Draft' && !(hasValidationLayers || hasLegacyValidation || hasRiskLevel);
         return (
           <div style={{ whiteSpace: 'nowrap' }}>
-            <StatusBadge type="status" value={st} isPending={isPending} />
+            {isPending ? (
+              <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap bg-blue-50 text-blue-600">Đang xử lý</span>
+            ) : (
+              <StatusBadge type="status" value={st} />
+            )}
           </div>
         );
       },
@@ -408,10 +413,18 @@ const InvoiceList: React.FC = () => {
         </div>
         <Space size={12}>
           <Button 
-            icon={<DownloadOutlined />} 
+            icon={<DownloadOutlined />}
             onClick={handleExportMisa}
             loading={exportMisaMutation.isPending}
-            style={{ borderRadius: 10, fontWeight: 600, height: 42, color: '#4880FF', borderColor: '#4880FF' }}
+            disabled={hasNonApprovedInSelected}
+            title={hasNonApprovedInSelected ? "Chỉ hỗ trợ xuất file Excel cho các hóa đơn đã duyệt" : "Xuất Excel"}
+            style={{ 
+              borderRadius: 10, 
+              fontWeight: 600, 
+              height: 42, 
+              color: hasNonApprovedInSelected ? undefined : '#4880FF', 
+              borderColor: hasNonApprovedInSelected ? undefined : '#4880FF' 
+            }}
           >
             Xuất Excel {selectedRowKeys.length > 0 ? `(${selectedRowKeys.length})` : ''}
           </Button>

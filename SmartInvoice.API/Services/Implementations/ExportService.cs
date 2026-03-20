@@ -228,21 +228,21 @@ public class ExportService : IExportService
                 !string.IsNullOrEmpty(inv.FormNumber) && inv.FormNumber.StartsWith("2");
             string? maKho = config?.DefaultWarehouse;
 
-            // Nếu AI không đọc được LineItems nào, tạo 1 list giả chứa tổng tiền để tránh rớt mất hóa đơn
-            // if (!hasLineItems)
-            // {
-            //     lineItems = new List<LineItemJson>
-            //     {
-            //         new LineItemJson
-            //         {
-            //             ProductName = $"Hàng hóa/dịch vụ theo HĐ {inv.InvoiceNumber}",
-            //             Quantity = 1,
-            //             UnitPrice = inv.TotalAmountBeforeTax ?? inv.TotalAmount,
-            //             TotalAmount = inv.TotalAmountBeforeTax ?? inv.TotalAmount,
-            //             VatAmount = inv.TotalTaxAmount ?? 0,
-            //         },
-            //     };
-            // }
+            // Nếu hệ thống không đọc được LineItems nào, tạo 1 list giả chứa tổng tiền để tránh rớt mất hóa đơn
+            if (!hasLineItems)
+            {
+                lineItems = new List<SmartInvoice.API.Entities.JsonModels.InvoiceLineItem>
+                {
+                    new SmartInvoice.API.Entities.JsonModels.InvoiceLineItem
+                    {
+                        ProductName = $"Hàng hóa/dịch vụ theo HĐ {inv.InvoiceNumber}",
+                        Quantity = 1,
+                        UnitPrice = inv.TotalAmountBeforeTax ?? inv.TotalAmount,
+                        TotalAmount = inv.TotalAmountBeforeTax ?? inv.TotalAmount,
+                        VatAmount = inv.TotalTaxAmount ?? 0,
+                    },
+                };
+            }
 
             foreach (var item in lineItems)
             {
