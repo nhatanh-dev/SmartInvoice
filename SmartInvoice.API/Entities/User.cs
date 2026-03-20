@@ -1,6 +1,6 @@
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Collections.Generic;
 using SmartInvoice.API.Enums;
 
 namespace SmartInvoice.API.Entities;
@@ -21,6 +21,7 @@ public class User : ISoftDelete
 
     // --- Multi-tenant ---
     public Guid CompanyId { get; set; }
+
     [ForeignKey(nameof(CompanyId))]
     public Company? Company { get; set; }
 

@@ -1,27 +1,28 @@
-using Amazon.S3;
+using System.Reflection;
+using System.Text;
 using Amazon.CognitoIdentityProvider;
+using Amazon.S3;
 using Amazon.SQS;
-using Microsoft.EntityFrameworkCore;
-using SmartInvoice.API.Data;
-using SmartInvoice.API.Repositories.Interfaces;
-using SmartInvoice.API.Repositories.Implementations;
-using SmartInvoice.API.Services.Interfaces;
-using SmartInvoice.API.Services.Implementations;
-using SmartInvoice.API.Entities;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.IdentityModel.Tokens;
-using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using SmartInvoice.API.Services;
-using Microsoft.AspNetCore.Authentication;
-using SmartInvoice.API.Security;
-using System.Reflection;
-using SmartInvoice.API.Constants;
+using Microsoft.IdentityModel.Tokens;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
+using SmartInvoice.API.Constants;
+using SmartInvoice.API.Data;
+using SmartInvoice.API.Entities;
+using SmartInvoice.API.Repositories.Implementations;
+using SmartInvoice.API.Repositories.Interfaces;
+using SmartInvoice.API.Security;
+using SmartInvoice.API.Services;
+using SmartInvoice.API.Services.Implementations;
+using SmartInvoice.API.Services.Interfaces;
+
 // DotNetEnv logic removed since we now use parameter store
 
 var builder = WebApplication.CreateBuilder(args);
@@ -46,7 +47,8 @@ builder.Configuration.AddSystemsManager("/SmartInvoice/dev/");
 var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
 if (string.IsNullOrEmpty(connectionString))
 {
-    connectionString = $"Host={builder.Configuration["POSTGRES_HOST"]};Port={builder.Configuration["POSTGRES_PORT"]};Database={builder.Configuration["POSTGRES_DB"]};Username={builder.Configuration["POSTGRES_USER"]};Password={builder.Configuration["POSTGRES_PASSWORD"]}";
+    connectionString =
+        $"Host={builder.Configuration["POSTGRES_HOST"]};Port={builder.Configuration["POSTGRES_PORT"]};Database={builder.Configuration["POSTGRES_DB"]};Username={builder.Configuration["POSTGRES_USER"]};Password={builder.Configuration["POSTGRES_PASSWORD"]}";
 }
 
 var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
@@ -54,10 +56,11 @@ dataSourceBuilder.EnableDynamicJson();
 var dataSource = dataSourceBuilder.Build();
 builder.Services.AddSingleton(dataSource);
 
-builder.Services.AddDbContext<AppDbContext>((sp, options) =>
-    options.UseNpgsql(sp.GetRequiredService<Npgsql.NpgsqlDataSource>()));
+builder.Services.AddDbContext<AppDbContext>(
+    (sp, options) => options.UseNpgsql(sp.GetRequiredService<Npgsql.NpgsqlDataSource>())
+);
 
-// 2. Kết nối AWS S3 
+// 2. Kết nối AWS S3
 // (Nó sẽ tự tìm AWS Credentials trong máy bạn ở ~/.aws/credentials hoặc biến môi trường)
 builder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());
 builder.Services.AddAWSService<IAmazonS3>();
@@ -105,34 +108,43 @@ builder.Services.AddHttpClient<IOcrClientService, OcrClientService>(client =>
 // - Timeout: 5 seconds per request
 // - Retry: 3 attempts with exponential backoff (1s, 2s, 4s) for 429 and 5xx errors
 // - Circuit Breaker: Break after 5 consecutive failures, stay broken for 1 minute
-builder.Services.AddHttpClient("VietQR")
+builder
+    .Services.AddHttpClient("VietQR")
     .AddTransientHttpErrorPolicy(p =>
         p.Or<HttpRequestException>()
-          .WaitAndRetryAsync(
-              retryCount: 3,
-              sleepDurationProvider: attempt =>
-              {
-                  // Exponential backoff: 2^attempt seconds (1s, 2s, 4s)
-                  var delaySeconds = Math.Pow(2, attempt);
-                  return TimeSpan.FromSeconds(delaySeconds);
-              },
-              onRetry: (outcome, timespan, retryCount, context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine($"[VietQR Retry] Attempt {retryCount} after {timespan.TotalSeconds}s");
-              }))
+            .WaitAndRetryAsync(
+                retryCount: 3,
+                sleepDurationProvider: attempt =>
+                {
+                    // Exponential backoff: 2^attempt seconds (1s, 2s, 4s)
+                    var delaySeconds = Math.Pow(2, attempt);
+                    return TimeSpan.FromSeconds(delaySeconds);
+                },
+                onRetry: (outcome, timespan, retryCount, context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[VietQR Retry] Attempt {retryCount} after {timespan.TotalSeconds}s"
+                    );
+                }
+            )
+    )
     .AddTransientHttpErrorPolicy(p =>
         p.Or<HttpRequestException>()
-          .CircuitBreakerAsync(
-              handledEventsAllowedBeforeBreaking: 5,
-              durationOfBreak: TimeSpan.FromMinutes(1),
-              onBreak: (outcome, timespan, context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine($"[VietQR Circuit Breaker] Circuit opened for {timespan.TotalMinutes} minutes");
-              },
-              onReset: (context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine("[VietQR Circuit Breaker] Circuit reset");
-              }))
+            .CircuitBreakerAsync(
+                handledEventsAllowedBeforeBreaking: 5,
+                durationOfBreak: TimeSpan.FromMinutes(1),
+                onBreak: (outcome, timespan, context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[VietQR Circuit Breaker] Circuit opened for {timespan.TotalMinutes} minutes"
+                    );
+                },
+                onReset: (context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine("[VietQR Circuit Breaker] Circuit reset");
+                }
+            )
+    )
     .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(5)));
 
 // Register VietQR Service
@@ -156,32 +168,32 @@ builder.Services.AddScoped<ISqsMessagePublisher, SqsMessagePublisher>();
 // Register VietQR SQS Consumer as a hosted background service
 // This service continuously polls SQS for validation requests and updates invoices
 builder.Services.AddHostedService<VietQrSqsConsumerService>();
+
 // ==================== END SQS CONFIGURATION ====================
-
-
 
 // 7. Config Authentication (Cognito)
 var region = builder.Configuration["AWS_REGION"];
 var userPoolId = builder.Configuration["COGNITO_USER_POOL_ID"];
 var authority = $"https://cognito-idp.{region}.amazonaws.com/{userPoolId}";
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.Authority = authority;
-    options.TokenValidationParameters = new TokenValidationParameters
+builder
+    .Services.AddAuthentication(options =>
     {
-        ValidateIssuer = true,
-        ValidIssuer = authority,
-        ValidateAudience = false, // Cognito Access Token often doesn't contain audience, Id Token does.
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true
-    };
-});
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.Authority = authority;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = authority,
+            ValidateAudience = false, // Cognito Access Token often doesn't contain audience, Id Token does.
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+        };
+    });
 
 // 8. Config Authorization Policies based on Permissions
 // We iterate over the constants in the Permissions class and dynamically create a requirement
@@ -196,50 +208,71 @@ builder.Services.AddAuthorization(options =>
         var permissionValue = field.GetRawConstantValue()?.ToString();
         if (!string.IsNullOrEmpty(permissionValue))
         {
-            options.AddPolicy(permissionValue, policy => policy.RequireClaim("Permission", permissionValue));
+            // Dùng RequireAssertion để chấp nhận quyền cụ thể HOẶC quyền "*"
+            options.AddPolicy(
+                permissionValue,
+                policy =>
+                    policy.RequireAssertion(context =>
+                        context.User.HasClaim(c =>
+                            c.Type == "Permission" && (c.Value == permissionValue || c.Value == "*")
+                        )
+                    )
+            );
         }
     }
 });
 
-
-
 // 6. Config CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAmplify",
+    options.AddPolicy(
+        "AllowAmplify",
         builder =>
         {
-            builder.WithOrigins("http://localhost:3000")
-                   .AllowAnyHeader()
-                   .AllowAnyMethod()
-                   .AllowCredentials(); // Important for cookies/auth if needed
-        });
+            builder
+                .WithOrigins("http://localhost:3000")
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials(); // Important for cookies/auth if needed
+        }
+    );
 });
 
-builder.Services.AddControllers()
+builder
+    .Services.AddControllers()
     .AddJsonOptions(options =>
     {
         // Dòng này giúp bỏ qua lỗi vòng lặp (Cycle) khi 2 bảng trỏ qua lại
-        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.ReferenceHandler = System
+            .Text
+            .Json
+            .Serialization
+            .ReferenceHandler
+            .IgnoreCycles;
     });
+
 // Swagger để test API
 builder.Services.AddSwaggerGen(c =>
 {
-    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\nNhập 'Bearer' [khoảng trắng] và chuỗi token của bạn.\r\n\r\nExample: \"Bearer 1safsfsdfdfd\"",
-        Name = "Authorization",
-        In = Microsoft.OpenApi.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
+    c.AddSecurityDefinition(
+        "Bearer",
+        new Microsoft.OpenApi.OpenApiSecurityScheme
+        {
+            Description =
+                "JWT Authorization header using the Bearer scheme. \r\n\r\nNhập 'Bearer' [khoảng trắng] và chuỗi token của bạn.\r\n\r\nExample: \"Bearer 1safsfsdfdfd\"",
+            Name = "Authorization",
+            In = Microsoft.OpenApi.ParameterLocation.Header,
+            Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
+            Scheme = "Bearer",
+        }
+    );
 
     c.AddSecurityRequirement(doc => new Microsoft.OpenApi.OpenApiSecurityRequirement
     {
         {
             new Microsoft.OpenApi.OpenApiSecuritySchemeReference("Bearer", doc, null),
             new List<string>()
-        }
+        },
     });
 });
 
@@ -258,26 +291,28 @@ using (var scope = app.Services.CreateScope())
         // Seed basic document types if missing
         if (!context.Set<DocumentType>().Any())
         {
-            context.Set<DocumentType>().AddRange(
-                new DocumentType
-                {
-                    TypeCode = "GTGT",
-                    TypeName = "Hóa đơn giá trị gia tăng",
-                    IsActive = true,
-                    DisplayOrder = 1,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                },
-                new DocumentType
-                {
-                    TypeCode = "SALE",
-                    TypeName = "Hóa đơn bán hàng",
-                    IsActive = true,
-                    DisplayOrder = 2,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                }
-            );
+            context
+                .Set<DocumentType>()
+                .AddRange(
+                    new DocumentType
+                    {
+                        TypeCode = "GTGT",
+                        TypeName = "Hóa đơn giá trị gia tăng",
+                        IsActive = true,
+                        DisplayOrder = 1,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                    },
+                    new DocumentType
+                    {
+                        TypeCode = "SALE",
+                        TypeName = "Hóa đơn bán hàng",
+                        IsActive = true,
+                        DisplayOrder = 2,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                    }
+                );
             await context.SaveChangesAsync();
             Console.WriteLine("Seeded initial DocumentTypes.");
         }
@@ -298,19 +333,19 @@ if (app.Environment.IsDevelopment())
 
 // app.UseHttpsRedirection(); // Disabled for local Docker dev to prevent port issues
 
-app.UseCors(x => x
-    .AllowAnyMethod()
-    .AllowAnyHeader()
-    .SetIsOriginAllowed(origin => true) // Allow any origin
-    .AllowCredentials());
+app.UseCors(x =>
+    x.AllowAnyMethod()
+        .AllowAnyHeader()
+        .SetIsOriginAllowed(origin => true) // Allow any origin
+        .AllowCredentials()
+);
 
 // app.UseCors("AllowAmplify");
 
 app.UseAuthentication();
+app.UseMiddleware<SmartInvoice.API.Middlewares.TenantStatusMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
-
-
 
 app.Run();

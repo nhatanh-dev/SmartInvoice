@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,6 +15,8 @@ using SmartInvoice.API.Repositories.Interfaces;
 using SmartInvoice.API.Services.Interfaces;
 using SmartInvoice.API.Constants;
 using SmartInvoice.API.Enums;
+using SmartInvoice.API.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace SmartInvoice.API.Services.Implementations
 {
@@ -27,9 +29,12 @@ namespace SmartInvoice.API.Services.Implementations
         private readonly ILogger<InvoiceService> _logger;
         private readonly ISqsMessagePublisher _sqsPublisher;
         private readonly INotificationService _notificationService;
+        private readonly IQuotaService _quotaService;
+        private readonly AppDbContext _context;
 
-        public InvoiceService(IUnitOfWork unitOfWork, StorageService storageService, IInvoiceProcessorService invoiceProcessor, IConfiguration configuration, ILogger<InvoiceService> logger, ISqsMessagePublisher sqsPublisher, INotificationService notificationService)
+        public InvoiceService(AppDbContext context, IUnitOfWork unitOfWork, StorageService storageService, IInvoiceProcessorService invoiceProcessor, IConfiguration configuration, ILogger<InvoiceService> logger, ISqsMessagePublisher sqsPublisher, INotificationService notificationService, IQuotaService quotaService)
         {
+            _context = context;
             _unitOfWork = unitOfWork;
             _storageService = storageService;
             _invoiceProcessor = invoiceProcessor;
@@ -37,6 +42,7 @@ namespace SmartInvoice.API.Services.Implementations
             _logger = logger;
             _sqsPublisher = sqsPublisher;
             _notificationService = notificationService;
+            _quotaService = quotaService;
         }
 
         // ════════════════════════════════════════════
@@ -86,13 +92,16 @@ namespace SmartInvoice.API.Services.Implementations
             // LOGIC MỚI: Cần xem xét nếu CHƯA Approved VÀ nằm ở vùng rủi ro
             var needReviewCount = list.Count(i => i.Status != "Approved" && (i.RiskLevel == "Yellow" || i.RiskLevel == "Orange"));
 
+            var approvedCount = list.Count(i => i.Status == "Approved");
+
             return new InvoiceStatsDto
             {
                 TotalCount = totalCount,
                 TotalAmount = list.Sum(i => i.TotalAmount),
                 TotalTaxAmount = list.Sum(i => i.TotalTaxAmount ?? 0),
                 ValidCount = validCount,
-                NeedReviewCount = needReviewCount
+                NeedReviewCount = needReviewCount,
+                ApprovedCount = approvedCount
             };
         }
 
@@ -187,14 +196,89 @@ namespace SmartInvoice.API.Services.Implementations
             // Multi-tenant check
             if (invoice.CompanyId != companyId) return false;
 
-            // Chỉ cho phép xóa hóa đơn Draft
-            if (invoice.Status != "Draft")
-                throw new InvalidOperationException("Chỉ được xóa hóa đơn ở trạng thái Nháp.");
-
-            // Soft delete
+            // Cho phép xóa đối với mọi trạng thái để giảm dung lượng
             invoice.IsDeleted = true;
             invoice.DeletedAt = DateTime.UtcNow;
+            
             _unitOfWork.Invoices.Update(invoice);
+            await _unitOfWork.CompleteAsync();
+            return true;
+        }
+
+        public async Task<PagedResult<InvoiceDto>> GetTrashInvoicesAsync(GetInvoicesQueryDto query, Guid companyId, Guid userId, string userRole)
+        {
+            var (items, totalCount) = await _unitOfWork.Invoices.GetPagedTrashInvoicesAsync(query, companyId, userId, userRole);
+
+            var dtos = items.Select(i => new InvoiceDto
+            {
+                InvoiceId = i.InvoiceId,
+                InvoiceNumber = i.InvoiceNumber,
+                SerialNumber = i.SerialNumber,
+                InvoiceDate = i.InvoiceDate,
+                CreatedAt = i.CreatedAt,
+                SellerName = i.Seller?.Name,
+                SellerTaxCode = i.Seller?.TaxCode,
+                TotalAmount = i.TotalAmount,
+                InvoiceCurrency = i.InvoiceCurrency,
+                Status = i.Status,
+                RiskLevel = i.RiskLevel,
+                ProcessingMethod = i.ProcessingMethod,
+                UploadedByName = i.Workflow?.Uploader?.FullName ?? "Unknown"
+            }).ToList();
+
+            return new PagedResult<InvoiceDto>
+            {
+                Items = dtos,
+                TotalCount = totalCount,
+                PageIndex = query.Page,
+                PageSize = query.Size
+            };
+        }
+
+        public async Task<bool> RestoreInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole)
+        {
+            var invoice = await _unitOfWork.Invoices.GetTrashInvoiceWithDetailsAsync(id);
+            if (invoice == null || invoice.CompanyId != companyId) return false;
+            
+            if (userRole == "Member" && invoice.Workflow?.UploadedBy != userId) return false;
+
+            invoice.IsDeleted = false;
+            invoice.DeletedAt = null;
+            _unitOfWork.Invoices.Update(invoice);
+            await _unitOfWork.CompleteAsync();
+            return true;
+        }
+
+        public async Task<bool> HardDeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole)
+        {
+            var invoice = await _unitOfWork.Invoices.GetTrashInvoiceWithDetailsAsync(id);
+            if (invoice == null || invoice.CompanyId != companyId) return false;
+            
+            if (userRole == "Member" && invoice.Workflow?.UploadedBy != userId) return false;
+
+            long totalDeletedSize = 0;
+
+            var filesToDelete = new List<FileStorage?>();
+            if (invoice.OriginalFile != null) filesToDelete.Add(invoice.OriginalFile);
+            if (invoice.VisualFile != null && invoice.VisualFileId != invoice.OriginalFileId) filesToDelete.Add(invoice.VisualFile);
+
+            foreach (var file in filesToDelete)
+            {
+                if (file != null && !string.IsNullOrEmpty(file.S3Key))
+                {
+                    await _storageService.DeleteFileAsync(file.S3Key);
+                    totalDeletedSize += file.FileSize;
+                    _unitOfWork.FileStorages.Remove(file);
+                }
+            }
+
+            if (totalDeletedSize > 0)
+            {
+                await _quotaService.ReleaseStorageQuotaAsync(companyId, totalDeletedSize);
+            }
+
+            // Also hard delete from DB
+            _unitOfWork.Invoices.Remove(invoice);
             await _unitOfWork.CompleteAsync();
             return true;
         }
@@ -222,7 +306,8 @@ namespace SmartInvoice.API.Services.Implementations
                 Status = i.Status,
                 RiskLevel = i.RiskLevel,
                 ProcessingMethod = i.ProcessingMethod,
-                UploadedByName = i.Workflow.Uploader?.FullName ?? "Unknown"
+                UploadedByName = i.Workflow.Uploader?.FullName ?? "Unknown",
+                CurrentApprovalStep = i.Workflow != null ? i.Workflow.CurrentApprovalStep : 1
             }).ToList();
 
             return new PagedResult<InvoiceDto>
@@ -401,8 +486,8 @@ namespace SmartInvoice.API.Services.Implementations
             if (invoice.Status != "Pending")
                 throw new InvalidOperationException($"Chỉ có thể duyệt hóa đơn ở trạng thái Chờ duyệt. Trạng thái hiện tại: {invoice.Status}");
 
-            var company = await _unitOfWork.Companies.GetByIdAsync(companyId);
-            bool isPremiumTier = company.SubscriptionTier == "Professional" || company.SubscriptionTier == "Enterprise";
+            var company = await _context.Companies.Include(c => c.SubscriptionPackage).FirstOrDefaultAsync(c => c.CompanyId == companyId);
+            bool isPremiumTier = company != null && company.SubscriptionPackage != null && company.SubscriptionPackage.HasAdvancedWorkflow;
             bool needsTwoStep = isPremiumTier && company.RequireTwoStepApproval && invoice.TotalAmount >= (company.TwoStepApprovalThreshold ?? 0);
 
             var oldStatus = invoice.Status;
@@ -763,6 +848,9 @@ namespace SmartInvoice.API.Services.Implementations
                 _logger?.LogInformation("Preparing to persist invoice. IsValid={IsValid}, RiskLevelCandidate={RiskLevelCandidate}", isInvoiceValid, isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Yellow" : "Green") : "Red");
                 // 1. Tạo FileStorage cho file XML
                 var fileInfo = new FileInfo(tempFilePath);
+                long fileSize = fileInfo.Exists ? fileInfo.Length : 0;
+                await _quotaService.ValidateStorageQuotaAsync(CompanyId, fileSize);
+
                 var fileStorage = new FileStorage
                 {
                     FileId = Guid.NewGuid(),
@@ -770,13 +858,15 @@ namespace SmartInvoice.API.Services.Implementations
                     UploadedBy = UserId,
                     OriginalFileName = s3Key.Split('/').Last(),
                     FileExtension = ".xml",
-                    FileSize = fileInfo.Exists ? fileInfo.Length : 0,
+                    FileSize = fileSize,
                     MimeType = "text/xml",
                     S3BucketName = bucketName,
                     S3Key = s3Key,
                     IsProcessed = true,
                     ProcessedAt = DateTime.UtcNow
                 };
+                
+                await _quotaService.ConsumeStorageQuotaAsync(CompanyId, fileSize);
 
                 // Helper functions
                 string? GetErrorStr(List<ValidationErrorDetail>? errs) => errs != null && errs.Any() ? System.Text.Json.JsonSerializer.Serialize(errs) : null;
@@ -1313,6 +1403,9 @@ namespace SmartInvoice.API.Services.Implementations
                     _logger?.LogInformation("      • BucketName: {BucketName}", bucketName);
                     _logger?.LogInformation("      • S3Region: {Region}", _configuration["AWS:Region"] ?? "ap-southeast-1");
 
+                    long s3FileSize = await _storageService.GetFileSizeAsync(request.S3Key);
+                    await _quotaService.ValidateStorageQuotaAsync(CompanyId, s3FileSize);
+
                     var fileStorage = new FileStorage
                     {
                         FileId = Guid.NewGuid(),
@@ -1320,7 +1413,7 @@ namespace SmartInvoice.API.Services.Implementations
                         UploadedBy = UserId,
                         OriginalFileName = request.S3Key.Split('/').Last(),
                         FileExtension = ".jpg",
-                        FileSize = 0,
+                        FileSize = s3FileSize,
                         MimeType = "image/jpeg",
                         S3BucketName = bucketName,
                         S3Key = request.S3Key,
@@ -1329,6 +1422,8 @@ namespace SmartInvoice.API.Services.Implementations
                     };
                     visualFileId = fileStorage.FileId;
                     await _unitOfWork.FileStorages.AddAsync(fileStorage);
+                    
+                    await _quotaService.ConsumeStorageQuotaAsync(CompanyId, s3FileSize);
                     _logger?.LogInformation("      ✅ FileStorage created: {FileId}", visualFileId);
                 }
             }

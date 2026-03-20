@@ -1,4 +1,4 @@
-namespace SmartInvoice.API.DTOs.Company;
+﻿namespace SmartInvoice.API.DTOs.Company;
 
 public class CompanyDto
 {
@@ -17,9 +17,15 @@ public class CompanyDto
     public bool RequireTwoStepApproval { get; set; }
     public decimal? TwoStepApprovalThreshold { get; set; }
     public string BillingCycle { get; set; } = null!;
+    public DateTime? SubscriptionStartDate { get; set; }
+    public DateTime? SubscriptionExpiredAt { get; set; }
     public int MaxUsers { get; set; }
     public int MaxInvoicesPerMonth { get; set; }
     public int StorageQuotaGB { get; set; }
+    public int UsedInvoicesThisMonth { get; set; }
+    public long UsedStorageBytes { get; set; }
+    public int CurrentActiveUsers { get; set; }
+    public int ExtraInvoicesBalance { get; set; }
     public bool IsActive { get; set; }
 }
 

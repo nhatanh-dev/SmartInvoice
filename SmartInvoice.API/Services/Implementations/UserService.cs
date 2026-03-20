@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Amazon.CognitoIdentityProvider;
@@ -16,16 +16,19 @@ namespace SmartInvoice.API.Services.Implementations
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAmazonCognitoIdentityProvider _cognitoClient;
         private readonly string _userPoolId;
+        private readonly IQuotaService _quotaService;
 
         public UserService(
             IUnitOfWork unitOfWork,
             IAmazonCognitoIdentityProvider cognitoClient,
-            Microsoft.Extensions.Configuration.IConfiguration configuration
+            Microsoft.Extensions.Configuration.IConfiguration configuration,
+            IQuotaService quotaService
         )
         {
             _unitOfWork = unitOfWork;
             _cognitoClient = cognitoClient;
             _userPoolId = configuration["COGNITO_USER_POOL_ID"] ?? "";
+            _quotaService = quotaService;
         }
 
         public async Task<User?> GetUserByIdAsync(Guid id)
@@ -78,6 +81,9 @@ namespace SmartInvoice.API.Services.Implementations
 
         public async Task<User> CreateCompanyMemberAsync(CreateCompanyMemberDto dto, Guid companyId)
         {
+            // Kiểm tra giới hạn user của công ty
+            await _quotaService.ValidateUserQuotaAsync(companyId);
+
             var validCompanyRoles = new[]
             {
                 UserRole.CompanyAdmin.ToString(),
@@ -180,6 +186,10 @@ namespace SmartInvoice.API.Services.Implementations
                 await _unitOfWork.CompleteAsync();
 
                 await _unitOfWork.CommitTransactionAsync();
+
+                // Cập nhật tăng số user sử dụng trong gói
+                await _quotaService.IncreaseUserCountAsync(companyId);
+
                 return userToReturn;
             }
             catch (Exception ex)
@@ -216,40 +226,25 @@ namespace SmartInvoice.API.Services.Implementations
             if (user == null || user.CompanyId != companyId)
                 throw new Exception("User not found or you don't have permission.");
 
-            // Can't update SuperAdmin or CompanyAdmin here easily if we restrict logic,
-            // but for now, rely on API endpoint auth.
-
-            var validCompanyRoles = new[]
-            {
-                UserRole.CompanyAdmin.ToString(),
-                UserRole.ChiefAccountant.ToString(),
-                UserRole.Accountant.ToString(),
-                UserRole.Viewer.ToString(),
-            };
+            bool wasActive = user.IsActive;
 
             user.FullName = dto.FullName;
             user.EmployeeId = dto.EmployeeId;
+            user.Role = dto.Role;
+            user.Permissions = dto.Permissions ?? new List<string>();
             user.IsActive = dto.IsActive;
             user.UpdatedAt = DateTime.UtcNow;
 
-            if (!string.IsNullOrEmpty(dto.Role) && validCompanyRoles.Contains(dto.Role))
-            {
-                bool isRoleChanged = user.Role != dto.Role;
-                user.Role = dto.Role;
-
-                // Nếu FE có gửi bộ quyền mới cụ thể -> Cập nhật theo FE
-                if (dto.Permissions != null)
-                {
-                    user.Permissions = dto.Permissions.ToList();
-                }
-                // Nếu FE không gửi bộ quyền, NHƯNG Role bị thay đổi -> Tự động Reset quyền theo Role mới
-                else if (isRoleChanged)
-                {
-                    user.Permissions = GetDefaultPermissionsForRole(dto.Role);
-                }
-            }
-
             _unitOfWork.Users.Update(user);
+
+            if (wasActive && !dto.IsActive)
+            {
+                await _quotaService.DecreaseUserCountAsync(companyId);
+            }
+            else if (!wasActive && dto.IsActive)
+            {
+                await _quotaService.IncreaseUserCountAsync(companyId);
+            }
 
             // Also update Cognito if needed
             if (user.IsActive == false)
@@ -294,25 +289,24 @@ namespace SmartInvoice.API.Services.Implementations
             if (user == null || user.CompanyId != companyId)
                 throw new Exception("User not found or you don't have permission.");
 
-            // 1. Delete/Disable from Cognito
-            // It's safer to disable rather than delete in Cognito, or delete completely. Let's delete.
             try
             {
-                var delReq = new AdminDeleteUserRequest
-                {
-                    UserPoolId = _userPoolId,
-                    Username = user.Email,
-                };
+                var delReq = new AdminDeleteUserRequest { UserPoolId = _userPoolId, Username = user.Email };
                 await _cognitoClient.AdminDeleteUserAsync(delReq);
             }
-            catch (UserNotFoundException)
-            {
-                // Ignore if not in Cognito
-            }
+            catch (UserNotFoundException) { }
 
-            // 2. Soft Delete in DB (Handled by AppDbContext interceptor in Remove)
+            bool wasActive = user.IsActive; 
+            
+            user.IsActive = false; 
+
             _unitOfWork.Users.Remove(user);
             await _unitOfWork.CompleteAsync();
+
+            if (wasActive) 
+            {
+                await _quotaService.DecreaseUserCountAsync(companyId);
+            }
         }
 
         private List<string> GetDefaultPermissionsForRole(string role)

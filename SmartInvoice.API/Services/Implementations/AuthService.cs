@@ -28,6 +28,7 @@ namespace SmartInvoice.API.Services.Implementations
         private readonly string _clientId;
         private readonly string _userPoolId;
         private readonly string _clientSecret;
+        private readonly IQuotaService _quotaService;
 
         public AuthService(
             IUnitOfWork unitOfWork,
@@ -35,7 +36,8 @@ namespace SmartInvoice.API.Services.Implementations
             IAmazonCognitoIdentityProvider cognitoClient,
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory,
-            IMemoryCache cache)
+            IMemoryCache cache,
+            IQuotaService quotaService)
         {
             _unitOfWork = unitOfWork;
             _context = context;
@@ -45,6 +47,7 @@ namespace SmartInvoice.API.Services.Implementations
             _clientId = configuration["COGNITO_CLIENT_ID"] ?? "";
             _userPoolId = configuration["COGNITO_USER_POOL_ID"] ?? "";
             _clientSecret = configuration["COGNITO_CLIENT_SECRET"] ?? "";
+            _quotaService = quotaService;
         }
 
         private string CalculateSecretHash(string username)
@@ -62,6 +65,19 @@ namespace SmartInvoice.API.Services.Implementations
 
         public async Task<CheckTaxCodeResponse> CheckTaxCodeAsync(CheckTaxCodeRequest request)
         {
+            var blacklisted = await _unitOfWork.LocalBlacklists.GetByTaxCodeAsync(request.TaxCode);
+            // Chỉ chặn nếu record blacklist này đang có hiệu lực (IsActive = true)
+            if (blacklisted != null && blacklisted.IsActive) 
+            {
+                return new CheckTaxCodeResponse
+                {
+                    IsValid = false,
+                    IsRegistered = false,
+                    // Trả lời rõ ràng lý do bị chặn
+                    ErrorMessage = $"Mã số thuế này đã bị từ chối phục vụ. Lý do: {blacklisted.Reason ?? "Vi phạm chính sách hệ thống"}."
+                };
+            }
+            
             // 1. Check in local DB
             var existingCompany = await _unitOfWork.Companies.GetByTaxCodeAsync(request.TaxCode);
             if (existingCompany != null)
@@ -498,11 +514,12 @@ namespace SmartInvoice.API.Services.Implementations
 
                 // Update local status
                 var user = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
-                if (user != null)
+                if (user != null && !user.IsActive)
                 {
                     user.IsActive = true;
-                    // await _unitOfWork.Users.UpdateAsync(user); // If needed, but tracking might handle it
                     await _unitOfWork.CompleteAsync();
+
+                    await _quotaService.IncreaseUserCountAsync(user.CompanyId);
                 }
             }
             catch (CodeMismatchException)

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using SmartInvoice.API.Data;
@@ -16,18 +16,24 @@ public class ExportService : IExportService
     private readonly IAwsS3Service _s3Service;
     private readonly AppDbContext _dbContext;
     private readonly IWebHostEnvironment _env;
+    private readonly IQuotaService _quotaService;
+    private readonly StorageService _storageService;
 
     public ExportService(
         IUnitOfWork unitOfWork,
         IAwsS3Service s3Service,
         AppDbContext dbContext,
-        IWebHostEnvironment env
+        IWebHostEnvironment env,
+        IQuotaService quotaService,
+        StorageService storageService
     )
     {
         _unitOfWork = unitOfWork;
         _s3Service = s3Service;
         _dbContext = dbContext;
         _env = env;
+        _quotaService = quotaService;
+        _storageService = storageService;
     }
 
     public async Task<ExportResultDto> GenerateExportAsync(
@@ -36,11 +42,31 @@ public class ExportService : IExportService
         GenerateExportRequestDto request
     )
     {
-        // 1. Tạo tên file thân thiện
-        var startStr = request.StartDate.AddHours(7).ToString("ddMMyyyy");
-        var endStr = request.EndDate.AddHours(7).ToString("ddMMyyyy");
+        // 0. Kiểm tra nhanh trước khi vào DB (Dung lượng 0)
+        await _quotaService.ValidateStorageQuotaAsync(companyId, 0);
 
-        var fileName = $"Bao_cao_{request.ExportType}_{startStr}_{endStr}.xlsx";
+        // 1. Tạo tên file thân thiện (có thêm Timestamp để tránh trùng S3Key)
+        string fileName;
+        var timestampStr = DateTime.UtcNow.AddHours(7).ToString("yyyyMMdd_HHmmss");
+
+        if (request.InvoiceIds != null && request.InvoiceIds.Any())
+        {
+            fileName = $"Bao_cao_{request.ExportType}_TuyChon_{timestampStr}.xlsx";
+        }
+        else
+        {
+            var startStr = request.StartDate.HasValue ? request.StartDate.Value.AddHours(7).ToString("ddMMyyyy") : "Dau";
+            var endStr = request.EndDate.HasValue ? request.EndDate.Value.AddHours(7).ToString("ddMMyyyy") : "HienTai";
+            
+            if (!request.StartDate.HasValue && !request.EndDate.HasValue) 
+            {
+                fileName = $"Bao_cao_{request.ExportType}_ToanBo_{timestampStr}.xlsx";
+            }
+            else
+            {
+                fileName = $"Bao_cao_{request.ExportType}_{startStr}_{endStr}_{timestampStr}.xlsx";
+            }
+        }
 
         // 2. Tạo record ExportHistory với Status = Processing
         var filterCriteria = JsonSerializer.Serialize(
@@ -72,17 +98,30 @@ public class ExportService : IExportService
         try
         {
             // 3. Query DB lấy danh sách hóa đơn theo Filter (AsNoTracking để tối ưu memory)
-            var query = _dbContext
-                .Invoices.AsNoTracking()
-                .Where(i =>
-                    i.CompanyId == companyId
-                    && i.InvoiceDate >= request.StartDate
-                    && i.InvoiceDate <= request.EndDate
-                );
+            var query = _dbContext.Invoices.AsNoTracking().Where(i => i.CompanyId == companyId);
 
-            if (!string.IsNullOrEmpty(request.InvoiceStatus))
+            if (request.InvoiceIds != null && request.InvoiceIds.Any())
             {
-                query = query.Where(i => i.Status == request.InvoiceStatus);
+                query = query.Where(i => request.InvoiceIds.Contains(i.InvoiceId));
+            }
+            else
+            {
+                if (request.StartDate.HasValue) 
+                    query = query.Where(i => i.InvoiceDate >= request.StartDate.Value);
+                
+                if (request.EndDate.HasValue) 
+                    query = query.Where(i => i.InvoiceDate <= request.EndDate.Value);
+
+                if (!string.IsNullOrEmpty(request.InvoiceStatus))
+                {
+                    query = query.Where(i => i.Status == request.InvoiceStatus);
+                }
+            }
+
+            // Cột mốc quan trọng: Nếu là xuất MISA thì CHỈ được phép lấy hóa đơn đã duyệt (Approved)
+            if (request.ExportType.Equals("MISA", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(i => i.Status == "Approved");
             }
 
             var invoices = await query.OrderBy(i => i.InvoiceDate).ToListAsync();
@@ -107,13 +146,18 @@ public class ExportService : IExportService
             outputStream.Position = 0;
             var fileSize = outputStream.Length;
 
-            // 6. Upload lên S3
+            // 6. Kiểm tra lại dung lượng thật vừa sinh và upload lên S3
+            await _quotaService.ValidateStorageQuotaAsync(companyId, fileSize);
+
             var s3Key = await _s3Service.UploadExportFileAsync(
                 outputStream,
                 fileName,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 companyId
             );
+
+            // Ghi nhận trừ dung lượng dung lượng
+            await _quotaService.ConsumeStorageQuotaAsync(companyId, fileSize);
 
             // 7. Cập nhật ExportHistory thành Completed
             exportHistory.Status = ExportStatus.Completed.ToString();
@@ -384,4 +428,72 @@ public class ExportService : IExportService
         ws.Columns().AdjustToContents();
         workbook.SaveAs(output);
     }
+    public async Task<bool> SoftDeleteExportAsync(Guid exportId, Guid companyId)
+    {
+        var export = await _dbContext.ExportHistories.FirstOrDefaultAsync(x => x.ExportId == exportId && x.CompanyId == companyId);
+        if (export == null) return false;
+
+        export.IsDeleted = true;
+        export.DeletedAt = DateTime.UtcNow;
+        _dbContext.ExportHistories.Update(export);
+        await _dbContext.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<IEnumerable<object>> GetTrashExportsAsync(Guid companyId)
+    {
+        return await _dbContext.ExportHistories
+            .IgnoreQueryFilters()
+            .Where(x => x.CompanyId == companyId && x.IsDeleted)
+            .OrderByDescending(x => x.DeletedAt)
+            .Select(x => new
+            {
+                x.ExportId,
+                x.FileName,
+                fileType = x.FileType,
+                x.TotalRecords,
+                x.Status,
+                x.FileSize,
+                DeletedAt = x.DeletedAt
+            })
+            .ToListAsync();
+    }
+
+    public async Task<bool> RestoreExportAsync(Guid exportId, Guid companyId)
+    {
+        var export = await _dbContext.ExportHistories
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(x => x.ExportId == exportId && x.CompanyId == companyId && x.IsDeleted);
+        if (export == null) return false;
+
+        export.IsDeleted = false;
+        export.DeletedAt = null;
+        _dbContext.ExportHistories.Update(export);
+        await _dbContext.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> HardDeleteExportAsync(Guid exportId, Guid companyId)
+    {
+        var export = await _dbContext.ExportHistories
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(x => x.ExportId == exportId && x.CompanyId == companyId && x.IsDeleted);
+        if (export == null) return false;
+
+        if (!string.IsNullOrEmpty(export.S3Key))
+        {
+            await _storageService.DeleteFileAsync(export.S3Key);
+        }
+
+        if (export.FileSize.HasValue && export.FileSize.Value > 0)
+        {
+            await _quotaService.ReleaseStorageQuotaAsync(companyId, export.FileSize.Value);
+        }
+
+        await _dbContext.ExportHistories.Where(e => e.ExportId == exportId).ExecuteDeleteAsync();
+        return true;
+    }
 }
+
+
+

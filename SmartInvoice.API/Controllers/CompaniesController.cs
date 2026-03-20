@@ -1,12 +1,13 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SmartInvoice.API.DTOs.Company;
 using SmartInvoice.API.Entities;
+using SmartInvoice.API.Data;
 using SmartInvoice.API.Services.Interfaces;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace SmartInvoice.API.Controllers;
 
@@ -23,6 +24,7 @@ public class CompaniesController : ControllerBase
     }
 
     [HttpGet]
+    [Authorize(Policy = Constants.Permissions.CompanyView)]
     public async Task<ActionResult<IEnumerable<CompanyDto>>> GetAll()
     {
         var companies = await _companyService.GetAllAsync();
@@ -43,16 +45,23 @@ public class CompaniesController : ControllerBase
             RequireTwoStepApproval = c.RequireTwoStepApproval,
             TwoStepApprovalThreshold = c.TwoStepApprovalThreshold,
             BillingCycle = c.BillingCycle,
+            SubscriptionStartDate = c.SubscriptionStartDate,
+            SubscriptionExpiredAt = c.SubscriptionExpiredAt,
             MaxUsers = c.MaxUsers,
             MaxInvoicesPerMonth = c.MaxInvoicesPerMonth,
             StorageQuotaGB = c.StorageQuotaGB,
-            IsActive = c.IsActive
+            UsedInvoicesThisMonth = c.UsedInvoicesThisMonth,
+            UsedStorageBytes = c.UsedStorageBytes,
+            CurrentActiveUsers = c.CurrentActiveUsers,
+            ExtraInvoicesBalance = c.ExtraInvoicesBalance,
+            IsActive = c.IsActive,
         });
 
         return Ok(dtos);
     }
 
-    [HttpGet("{id}")]
+    [HttpGet("{id:guid}")]
+    [Authorize(Policy = Constants.Permissions.CompanyView)]
     public async Task<ActionResult<CompanyDto>> GetById(Guid id)
     {
         var c = await _companyService.GetByIdAsync(id);
@@ -76,16 +85,20 @@ public class CompaniesController : ControllerBase
             RequireTwoStepApproval = c.RequireTwoStepApproval,
             TwoStepApprovalThreshold = c.TwoStepApprovalThreshold,
             BillingCycle = c.BillingCycle,
+            SubscriptionStartDate = c.SubscriptionStartDate,
+            SubscriptionExpiredAt = c.SubscriptionExpiredAt,
             MaxUsers = c.MaxUsers,
             MaxInvoicesPerMonth = c.MaxInvoicesPerMonth,
-            StorageQuotaGB = c.StorageQuotaGB,
-            IsActive = c.IsActive
+            StorageQuotaGB = c.StorageQuotaGB,            UsedInvoicesThisMonth = c.UsedInvoicesThisMonth,
+            UsedStorageBytes = c.UsedStorageBytes,
+            CurrentActiveUsers = c.CurrentActiveUsers,            IsActive = c.IsActive,
         };
 
         return Ok(dto);
     }
 
     [HttpPost]
+    [Authorize(Policy = Constants.Permissions.CompanyManage)]
     public async Task<ActionResult<CompanyDto>> Create([FromBody] CreateCompanyDto dto)
     {
         var company = new Company
@@ -103,21 +116,26 @@ public class CompaniesController : ControllerBase
             SubscriptionPackageId = dto.SubscriptionPackageId,
             UpdatedAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
-            RegistrationDate = DateTime.UtcNow
+            RegistrationDate = DateTime.UtcNow,
         };
 
         var created = await _companyService.CreateAsync(company);
 
-        return CreatedAtAction(nameof(GetById), new { id = created.CompanyId }, new CompanyDto
-        {
-            CompanyId = created.CompanyId,
-            CompanyName = created.CompanyName,
-            TaxCode = created.TaxCode,
-            Email = created.Email
-        });
+        return CreatedAtAction(
+            nameof(GetById),
+            new { id = created.CompanyId },
+            new CompanyDto
+            {
+                CompanyId = created.CompanyId,
+                CompanyName = created.CompanyName,
+                TaxCode = created.TaxCode,
+                Email = created.Email,
+            }
+        );
     }
 
-    [HttpPut("{id}")]
+    [HttpPut("{id:guid}")]
+    [Authorize(Policy = Constants.Permissions.CompanyManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCompanyDto dto)
     {
         var existing = await _companyService.GetByIdAsync(id);
@@ -141,7 +159,8 @@ public class CompaniesController : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("{id}")]
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = Constants.Permissions.CompanyManage)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var existing = await _companyService.GetByIdAsync(id);
@@ -150,5 +169,25 @@ public class CompaniesController : ControllerBase
 
         await _companyService.DeleteAsync(id);
         return NoContent();
+    }
+
+    [HttpPut("{id:guid}/toggle-status")]
+    [Authorize(Policy = Constants.Permissions.CompanyManage)]
+    public async Task<IActionResult> ToggleStatus(Guid id)
+    {
+        var existing = await _companyService.GetByIdAsync(id);
+        if (existing == null)
+            return NotFound(new { message = "Không tìm thấy công ty." });
+
+        // Lật ngược trạng thái: Đang true thành false, đang false thành true
+        existing.IsActive = !existing.IsActive;
+        existing.UpdatedAt = DateTime.UtcNow;
+
+        await _companyService.UpdateAsync(existing);
+        
+        return Ok(new { 
+            message = existing.IsActive ? "Đã mở khóa công ty thành công." : "Đã khóa công ty thành công.",
+            isActive = existing.IsActive 
+        });
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -38,9 +38,9 @@ namespace SmartInvoice.API.Controller
             _quotaService = quotaService;
         }
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  HELPER: Extract user claims
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
         private (Guid UserId, Guid CompanyId, string UserRole, string UserEmail) GetUserInfo()
         {
@@ -58,9 +58,9 @@ namespace SmartInvoice.API.Controller
         private string? GetClientIp() =>
             HttpContext.Connection.RemoteIpAddress?.ToString();
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  UPLOAD & PROCESS
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
         [HttpPost("generate-upload-url")]
         [Authorize(Policy = Constants.Permissions.InvoiceUpload)]
@@ -129,7 +129,7 @@ namespace SmartInvoice.API.Controller
         public async Task<IActionResult> TestProcessLocal(IFormFile file)
         {
             if (file == null || file.Length == 0)
-                return BadRequest("Vui lòng chọn 1 file XML để test.");
+                return BadRequest("Vui lÃ²ng chá»n 1 file XML Ä‘á»ƒ test.");
 
             var tempFilePath = Path.GetTempFileName();
             try
@@ -155,7 +155,7 @@ namespace SmartInvoice.API.Controller
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Message = $"Lỗi: {ex.Message}" });
+                return StatusCode(500, new { Message = $"Lá»—i: {ex.Message}" });
             }
             finally
             {
@@ -164,9 +164,9 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  LIST & DETAIL
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
         [HttpGet]
         [Authorize(Policy = Constants.Permissions.InvoiceView)]
@@ -188,7 +188,58 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        [HttpGet("{id}")]
+        [HttpGet("trash")]
+        [Authorize(Policy = Constants.Permissions.InvoiceView)]
+        public async Task<IActionResult> GetTrashInvoices([FromQuery] GetInvoicesQueryDto query)
+        {
+            try
+            {
+                var (userId, companyId, userRole, _) = GetUserInfo();
+                var result = await _invoiceService.GetTrashInvoicesAsync(query, companyId, userId, userRole);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+        }
+
+        [HttpPost("{id:guid}/restore")]
+        [Authorize(Policy = Constants.Permissions.InvoiceEdit)]
+        public async Task<IActionResult> RestoreInvoice(Guid id)
+        {
+            try
+            {
+                var (userId, companyId, userRole, _) = GetUserInfo();
+                var success = await _invoiceService.RestoreInvoiceAsync(id, companyId, userId, userRole);
+                if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
+                return Ok(new { Message = "Phục hồi thành công." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+        }
+
+        [HttpDelete("{id:guid}/hard")]
+        [Authorize(Policy = Constants.Permissions.InvoiceEdit)]
+        public async Task<IActionResult> HardDeleteInvoice(Guid id)
+        {
+            try
+            {
+                var (userId, companyId, userRole, _) = GetUserInfo();
+                var success = await _invoiceService.HardDeleteInvoiceAsync(id, companyId, userId, userRole);
+                if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
+                return Ok(new { Message = "Xóa vĩnh viễn thành công. Đã hoàn trả dung lượng." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+        }
+
+
+        [HttpGet("{id:guid}")]
         [Authorize(Policy = Constants.Permissions.InvoiceView)]
         public async Task<IActionResult> GetInvoiceById(Guid id)
         {
@@ -198,7 +249,7 @@ namespace SmartInvoice.API.Controller
                 var detail = await _invoiceService.GetInvoiceDetailAsync(id, companyId, userId, userRole);
 
                 if (detail == null)
-                    return NotFound(new { Message = $"Không tìm thấy hóa đơn với ID: {id}" });
+                    return NotFound(new { Message = $"KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n vá»›i ID: {id}" });
 
                 return Ok(detail);
             }
@@ -208,15 +259,15 @@ namespace SmartInvoice.API.Controller
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+                return StatusCode(500, new { Message = "Lá»—i server ná»™i bá»™", Error = ex.Message });
             }
         }
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  CRUD
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-        [HttpPut("{id}")]
+        [HttpPut("{id:guid}")]
         [Authorize(Policy = Constants.Permissions.InvoiceEdit)]
         public async Task<IActionResult> UpdateInvoice(Guid id, [FromBody] UpdateInvoiceDto request)
         {
@@ -224,11 +275,11 @@ namespace SmartInvoice.API.Controller
             {
                 var (userId, _, userRole, userEmail) = GetUserInfo();
                 await _invoiceService.UpdateInvoiceAsync(id, request, userId, userEmail, userRole, GetClientIp());
-                return Ok(new { Message = "Cập nhật thành công" });
+                return Ok(new { Message = "Cáº­p nháº­t thÃ nh cÃ´ng" });
             }
             catch (KeyNotFoundException)
             {
-                return NotFound(new { Message = "Không tìm thấy hóa đơn" });
+                return NotFound(new { Message = "KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n" });
             }
             catch (InvalidOperationException ex)
             {
@@ -240,7 +291,7 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        [HttpDelete("{id}")]
+        [HttpDelete("{id:guid}")]
         [Authorize(Policy = Constants.Permissions.InvoiceEdit)]
         public async Task<IActionResult> DeleteInvoice(Guid id)
         {
@@ -250,7 +301,7 @@ namespace SmartInvoice.API.Controller
                 var isDeleted = await _invoiceService.DeleteInvoiceAsync(id, companyId, userId, userRole);
 
                 if (!isDeleted)
-                    return NotFound(new { Message = $"Không tìm thấy hóa đơn với ID: {id}" });
+                    return NotFound(new { Message = $"KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n vá»›i ID: {id}" });
 
                 return NoContent();
             }
@@ -260,15 +311,15 @@ namespace SmartInvoice.API.Controller
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Message = "Lỗi khi xóa hóa đơn", Error = ex.Message });
+                return StatusCode(500, new { Message = "Lá»—i khi xÃ³a hÃ³a Ä‘Æ¡n", Error = ex.Message });
             }
         }
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  WORKFLOW
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-        [HttpPost("{id}/submit")]
+        [HttpPost("{id:guid}/submit")]
         [Authorize(Policy = Constants.Permissions.InvoiceUpload)]
         public async Task<IActionResult> SubmitInvoice(Guid id, [FromBody] SubmitInvoiceDto? request)
         {
@@ -276,11 +327,11 @@ namespace SmartInvoice.API.Controller
             {
                 var (userId, companyId, userRole, userEmail) = GetUserInfo();
                 await _invoiceService.SubmitInvoiceAsync(id, companyId, userId, userEmail, userRole, request?.Comment, GetClientIp());
-                return Ok(new { Message = "Hóa đơn đã được gửi duyệt thành công." });
+                return Ok(new { Message = "HÃ³a Ä‘Æ¡n Ä‘Ã£ Ä‘Æ°á»£c gá»­i duyá»‡t thÃ nh cÃ´ng." });
             }
             catch (KeyNotFoundException)
             {
-                return NotFound(new { Message = "Không tìm thấy hóa đơn." });
+                return NotFound(new { Message = "KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n." });
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -319,7 +370,7 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        [HttpPost("{id}/approve")]
+        [HttpPost("{id:guid}/approve")]
         [Authorize(Policy = Constants.Permissions.InvoiceApprove)]
         public async Task<IActionResult> ApproveInvoice(Guid id, [FromBody] ApproveInvoiceDto? request)
         {
@@ -327,11 +378,11 @@ namespace SmartInvoice.API.Controller
             {
                 var (userId, companyId, userRole, userEmail) = GetUserInfo();
                 await _invoiceService.ApproveInvoiceAsync(id, companyId, userId, userEmail, userRole, request?.Comment, GetClientIp());
-                return Ok(new { Message = "Hóa đơn đã được duyệt thành công." });
+                return Ok(new { Message = "HÃ³a Ä‘Æ¡n Ä‘Ã£ Ä‘Æ°á»£c duyá»‡t thÃ nh cÃ´ng." });
             }
             catch (KeyNotFoundException)
             {
-                return NotFound(new { Message = "Không tìm thấy hóa đơn." });
+                return NotFound(new { Message = "KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n." });
             }
             catch (UnauthorizedAccessException)
             {
@@ -347,7 +398,7 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        [HttpPost("{id}/reject")]
+        [HttpPost("{id:guid}/reject")]
         [Authorize(Policy = Constants.Permissions.InvoiceReject)]
         public async Task<IActionResult> RejectInvoice(Guid id, [FromBody] RejectInvoiceDto request)
         {
@@ -355,11 +406,11 @@ namespace SmartInvoice.API.Controller
             {
                 var (userId, companyId, userRole, userEmail) = GetUserInfo();
                 await _invoiceService.RejectInvoiceAsync(id, companyId, userId, userEmail, userRole, request.Reason, request.Comment, GetClientIp());
-                return Ok(new { Message = "Hóa đơn đã bị từ chối." });
+                return Ok(new { Message = "HÃ³a Ä‘Æ¡n Ä‘Ã£ bá»‹ tá»« chá»‘i." });
             }
             catch (KeyNotFoundException)
             {
-                return NotFound(new { Message = "Không tìm thấy hóa đơn." });
+                return NotFound(new { Message = "KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n." });
             }
             catch (UnauthorizedAccessException)
             {
@@ -375,11 +426,11 @@ namespace SmartInvoice.API.Controller
             }
         }
 
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  AUDIT LOG
-        // ════════════════════════════════════════════
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-        [HttpGet("{id}/audit-logs")]
+        [HttpGet("{id:guid}/audit-logs")]
         [Authorize(Policy = Constants.Permissions.InvoiceView)]
         public async Task<IActionResult> GetAuditLogs(Guid id)
         {
@@ -390,7 +441,7 @@ namespace SmartInvoice.API.Controller
             }
             catch (KeyNotFoundException)
             {
-                return NotFound(new { Message = "Không tìm thấy hóa đơn." });
+                return NotFound(new { Message = "KhÃ´ng tÃ¬m tháº¥y hÃ³a Ä‘Æ¡n." });
             }
             catch (Exception ex)
             {
