@@ -8,11 +8,16 @@ export interface CompanySettings {
   phoneNumber?: string;
   isAutoApproveEnabled: boolean;
   autoApproveThreshold: number;
+  requireTwoStepApproval: boolean;
+  twoStepApprovalThreshold: number;
+  hasAdvancedWorkflow: boolean;
 }
 
 export interface UpdateCompanySettings {
   isAutoApproveEnabled: boolean;
   autoApproveThreshold: number;
+  requireTwoStepApproval: boolean;
+  twoStepApprovalThreshold: number;
 }
 
 export interface UserProfileSettings {

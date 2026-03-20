@@ -105,6 +105,22 @@ const TeamManagement: React.FC = () => {
         }
     };
 
+    const handleToggleActive = async (record: CompanyMemberDto, checked: boolean) => {
+        try {
+            await userService.updateCompanyMember(record.id, {
+                fullName: record.fullName,
+                employeeId: record.employeeId || undefined,
+                role: record.role,
+                permissions: record.permissions || undefined,
+                isActive: checked // Gửi trạng thái mới (true/false) lên Backend
+            });
+            message.success(`Đã ${checked ? 'mở khóa' : 'ngừng hoạt động'} tài khoản ${record.fullName}`);
+            fetchMembers(); // Tải lại danh sách để UI tự động cập nhật màu sắc
+        } catch (error: any) {
+            message.error(error.response?.data?.message || 'Thao tác thất bại');
+        }
+    };
+
     const handleDeleteUser = async (id: string) => {
         try {
             await userService.deleteCompanyMember(id);
@@ -151,8 +167,26 @@ const TeamManagement: React.FC = () => {
             title: 'Trạng thái',
             dataIndex: 'isActive',
             key: 'isActive',
-            render: (isActive: boolean) => (
-                <Tag color={isActive ? 'green' : 'red'}>{isActive ? 'Hoạt động' : 'Đã khóa'}</Tag>
+            render: (isActive: boolean, record: CompanyMemberDto) => (
+                <Popconfirm
+                    title={isActive ? "Ngừng hoạt động nhân viên này?" : "Mở khóa nhân viên này?"}
+                    description={isActive 
+                        ? "Nhân viên này sẽ không thể đăng nhập" 
+                        : "Đảm bảo quyền đăng nhập của nhân viên khi mở khóa"}
+                    onConfirm={() => handleToggleActive(record, !isActive)}
+                    okText="Đồng ý"
+                    cancelText="Hủy"
+                    // Chặn không cho Admin tự khóa chính mình
+                    disabled={record.role === 'CompanyAdmin'} 
+                >
+                    <Switch 
+                        checked={isActive} 
+                        checkedChildren="Hoạt động" 
+                        unCheckedChildren="Đã khóa"
+                        disabled={record.role === 'CompanyAdmin'}
+                        style={!isActive ? { backgroundColor: '#ff4d4f' } : {}}
+                    />
+                </Popconfirm>
             ),
         },
         {
@@ -170,14 +204,16 @@ const TeamManagement: React.FC = () => {
                         Phân quyền
                     </Button>
                     <Popconfirm
-                        title="Xóa nhân viên này?"
-                        description="Họ sẽ bị mất quyền truy cập vào công ty lập tức."
+                        title="Xóa vĩnh viễn nhân viên này?"
+                        description="Dữ liệu sẽ bị ẩn khỏi hệ thống. Chỉ nên dùng khi nhập sai email!"
                         onConfirm={() => handleDeleteUser(record.id)}
-                        okText="Xóa"
+                        okText="Xóa vĩnh viễn"
                         cancelText="Hủy"
                         okButtonProps={{ danger: true }}
+                        disabled={record.role === 'CompanyAdmin'}
                     >
-                        <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                        {/* Nút Xóa giờ chỉ mang tính chất dọn dẹp data rác */}
+                        <Button type="text" danger icon={<DeleteOutlined />} size="small" disabled={record.role === 'CompanyAdmin'} />
                     </Popconfirm>
                 </Space>
             ),

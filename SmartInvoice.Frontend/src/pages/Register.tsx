@@ -44,7 +44,7 @@ const Register: React.FC = () => {
           address: undefined,
         });
         return;
-      }
+      } 
       if (checkResult.isRegistered) {
         message.error("Doanh nghiệp đã được đăng ký trên hệ thống");
         return;

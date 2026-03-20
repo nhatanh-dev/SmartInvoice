@@ -354,7 +354,7 @@ const InvoiceDetail: React.FC = () => {
           onClick={() => {
             Modal.confirm({
               title: "Phê duyệt hóa đơn?",
-              content: 'Hóa đơn sẽ được chuyển sang trạng thái "Đã duyệt".',
+              content: 'Hóa đơn sẽ tiếp tục quy trình duyệt hoặc chuyển sang trạng thái "Đã duyệt".',
               okText: "Phê duyệt",
               cancelText: "Hủy",
               onOk: () => approveMutation.mutate(),
