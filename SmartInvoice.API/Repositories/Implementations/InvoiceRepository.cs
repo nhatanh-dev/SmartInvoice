@@ -72,8 +72,8 @@ namespace SmartInvoice.API.Repositories.Implementations
         {
             var query = _context.Invoices.AsQueryable();
 
-            // 1. Tenant Isolation: MUST be restricted to CompanyId
-            query = query.Where(i => i.CompanyId == companyId && !i.IsDeleted);
+            // 1. Tenant Isolation: MUST be restricted to CompanyId and NOT show replaced versions
+            query = query.Where(i => i.CompanyId == companyId && !i.IsDeleted && !i.IsReplaced);
 
             // 2. Role-Based Access Control (RBAC)
             if (userRole == "Member")

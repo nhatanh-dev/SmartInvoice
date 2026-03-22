@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SmartInvoice.API.Data;
@@ -13,9 +14,11 @@ using SmartInvoice.API.Entities.JsonModels;
 namespace SmartInvoice.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260316162952_FixDynamicDateInSeedData")]
+    partial class FixDynamicDateInSeedData
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -128,9 +131,6 @@ namespace SmartInvoice.API.Migrations
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("CurrentActiveUsers")
-                        .HasColumnType("integer");
-
                     b.Property<DateTime>("CurrentCycleStart")
                         .HasColumnType("timestamp with time zone");
 
@@ -171,9 +171,6 @@ namespace SmartInvoice.API.Migrations
                     b.Property<DateTime>("RegistrationDate")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<bool>("RequireTwoStepApproval")
-                        .HasColumnType("boolean");
-
                     b.Property<int>("StorageQuotaGB")
                         .HasColumnType("integer");
 
@@ -196,17 +193,11 @@ namespace SmartInvoice.API.Migrations
                         .HasMaxLength(14)
                         .HasColumnType("character varying(14)");
 
-                    b.Property<decimal?>("TwoStepApprovalThreshold")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("UsedInvoicesThisMonth")
                         .HasColumnType("integer");
-
-                    b.Property<long>("UsedStorageBytes")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("Website")
                         .HasMaxLength(200)
@@ -337,9 +328,6 @@ namespace SmartInvoice.API.Migrations
                     b.Property<Guid>("CompanyId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<int>("DownloadCount")
                         .HasColumnType("integer");
 
@@ -372,9 +360,6 @@ namespace SmartInvoice.API.Migrations
 
                     b.Property<string>("FilterCriteria")
                         .HasColumnType("jsonb");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
 
                     b.Property<DateTime?>("LastDownloadAt")
                         .HasColumnType("timestamp with time zone");
@@ -765,13 +750,7 @@ namespace SmartInvoice.API.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
                     b.Property<string>("Reason")
@@ -1462,21 +1441,6 @@ namespace SmartInvoice.API.Migrations
                                 .HasColumnType("uuid")
                                 .HasColumnName("ApprovedBy");
 
-                            b1.Property<int>("CurrentApprovalStep")
-                                .HasColumnType("integer");
-
-                            b1.Property<DateTime?>("Level1ApprovedAt")
-                                .HasColumnType("timestamp with time zone");
-
-                            b1.Property<Guid?>("Level1ApprovedBy")
-                                .HasColumnType("uuid");
-
-                            b1.Property<DateTime?>("Level2ApprovedAt")
-                                .HasColumnType("timestamp with time zone");
-
-                            b1.Property<Guid?>("Level2ApprovedBy")
-                                .HasColumnType("uuid");
-
                             b1.Property<DateTime?>("RejectedAt")
                                 .HasColumnType("timestamp with time zone")
                                 .HasColumnName("RejectedAt");
@@ -1505,10 +1469,6 @@ namespace SmartInvoice.API.Migrations
 
                             b1.HasIndex("ApprovedBy");
 
-                            b1.HasIndex("Level1ApprovedBy");
-
-                            b1.HasIndex("Level2ApprovedBy");
-
                             b1.HasIndex("RejectedBy");
 
                             b1.HasIndex("SubmittedBy");
@@ -1523,14 +1483,6 @@ namespace SmartInvoice.API.Migrations
 
                             b1.WithOwner()
                                 .HasForeignKey("InvoiceId");
-
-                            b1.HasOne("SmartInvoice.API.Entities.User", "Level1Approver")
-                                .WithMany()
-                                .HasForeignKey("Level1ApprovedBy");
-
-                            b1.HasOne("SmartInvoice.API.Entities.User", "Level2Approver")
-                                .WithMany()
-                                .HasForeignKey("Level2ApprovedBy");
 
                             b1.HasOne("SmartInvoice.API.Entities.User", "Rejector")
                                 .WithMany()
@@ -1547,10 +1499,6 @@ namespace SmartInvoice.API.Migrations
                                 .IsRequired();
 
                             b1.Navigation("Approver");
-
-                            b1.Navigation("Level1Approver");
-
-                            b1.Navigation("Level2Approver");
 
                             b1.Navigation("Rejector");
 

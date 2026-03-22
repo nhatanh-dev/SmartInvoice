@@ -39,8 +39,6 @@ export interface ValidationResult {
     // Returned by API after saving to DB
     invoiceId?: string;
     isReplacement?: boolean;
-    newVersion?: number;
-    isAutoApproved?: boolean;
 }
 
 export interface BatchSubmitResult {
@@ -135,11 +133,23 @@ export interface RiskReason {
     checked_at: string | null;
 }
 
+export interface InvoiceVersionDto {
+    invoiceId: string;
+    version: number;
+    status: string;
+    riskLevel: string;
+    createdAt: string;
+}
+
 export interface InvoiceDetailDto {
     invoiceId: string;
     invoiceNumber: string;
     serialNumber: string | null;
     formNumber: string | null;
+
+    version?: number;
+    isReplaced?: boolean;
+    replacedBy?: string;
     invoiceDate: string;
     status: string;
     riskLevel: string;
@@ -326,6 +336,12 @@ export const invoiceService = {
     // --- Audit Logs ---
     async getAuditLogs(id: string): Promise<AuditLogDto[]> {
         const response = await apiClient.get<AuditLogDto[]>(`/invoices/${id}/audit-logs`);
+        return response.data;
+    },
+
+    // --- Versions ---
+    async getInvoiceVersions(id: string): Promise<InvoiceVersionDto[]> {
+        const response = await apiClient.get<InvoiceVersionDto[]>(`/invoices/${id}/versions`);
         return response.data;
     },
 };

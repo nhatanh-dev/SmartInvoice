@@ -43,6 +43,7 @@ import {
 import { invoiceService, ValidationResult } from "../services/invoice";
 import { useNavigate } from "react-router-dom";
 import ValidationChecklist from "../components/ValidationChecklist";
+import BusinessValidationSummary from "../components/BusinessValidationSummary";
 import LeaveUploadModal from "../components/LeaveUploadModal";
 
 const { Title, Text, Paragraph } = Typography;
@@ -90,7 +91,6 @@ interface ProcessResult {
   invoiceId?: string;
   submitStatus: SubmitStatus;
   submitError?: string;
-  isAutoApproved?: boolean;
 }
 
 const UploadInvoice: React.FC = () => {
@@ -299,8 +299,7 @@ const UploadInvoice: React.FC = () => {
                 result: validation as ValidationResultExtended,
                 invoiceId: validation.invoiceId,
                 errorMessage: finalErrorMessage,
-                submitStatus: validation.isAutoApproved ? "submitted" : "idle",
-                isAutoApproved: validation.isAutoApproved || false,
+                submitStatus: "idle",
               } as ProcessResult;
             });
             setSelectedRowKeys(getDefaultSelected(next));
@@ -504,21 +503,6 @@ const UploadInvoice: React.FC = () => {
     );
   };
 
-  const renderAutoApproveTag = (record: ProcessResult) => {
-    if (record.isAutoApproved) {
-      return (
-        <Tag
-          icon={<CheckCircleOutlined />}
-          color="#52c41a"
-          style={{ fontWeight: 600 }}
-        >
-          ✅ Tự động duyệt
-        </Tag>
-      );
-    }
-    return null;
-  };
-
   const renderActionCell = (record: ProcessResult) => {
     const isSubmittable =
       record.invoiceId &&
@@ -582,15 +566,7 @@ const UploadInvoice: React.FC = () => {
 
     // Render status or actions
     if (submitStatus === "submitted") {
-      return record.isAutoApproved ? (
-        <Tag
-          icon={<CheckCircleOutlined />}
-          color="#52c41a"
-          style={{ fontWeight: 600 }}
-        >
-          Tự động duyệt
-        </Tag>
-      ) : (
+      return (
         <Tag icon={<CheckCircleOutlined />} color="blue">
           Đã gửi duyệt
         </Tag>
@@ -688,14 +664,6 @@ const UploadInvoice: React.FC = () => {
         if (record.status === "processing")
           return <Text type="secondary">Đang bóc tách dữ liệu...</Text>;
 
-        if (record.isAutoApproved) {
-          return (
-            <Text style={{ color: "#52c41a", fontWeight: 500 }}>
-              Dữ liệu chuẩn xác (Hệ thống đã tự động duyệt)
-            </Text>
-          );
-        }
-
         if (record.status === "error") {
           const errors =
             record.result?.errorDetails && record.result.errorDetails.length > 0
@@ -726,11 +694,6 @@ const UploadInvoice: React.FC = () => {
               <Tooltip
                 title={
                   <div>
-                    {errorCode && (
-                      <div style={{ marginBottom: 4 }}>
-                        <Tag color="error">{errorCode}</Tag>
-                      </div>
-                    )}
                     <div>{firstMsg}</div>
                     {suggestion && (
                       <div
@@ -796,11 +759,6 @@ const UploadInvoice: React.FC = () => {
               <Tooltip
                 title={
                   <div>
-                    {errorCode && (
-                      <div style={{ marginBottom: 4 }}>
-                        <Tag color="warning">{errorCode}</Tag>
-                      </div>
-                    )}
                     <div>{firstMsg}</div>
                     {suggestion && (
                       <div
@@ -1375,10 +1333,7 @@ const UploadInvoice: React.FC = () => {
                   }
                   return (
                     <div style={{ background: "#fafbfc", padding: "16px" }}>
-                      <Title level={5} style={{ margin: "0 0 16px 0" }}>
-                        📋 Chi tiết kiểm tra xác thực hóa đơn
-                      </Title>
-                      <ValidationChecklist result={record.result} />
+                      <BusinessValidationSummary result={record.result} />
                     </div>
                   );
                 },
