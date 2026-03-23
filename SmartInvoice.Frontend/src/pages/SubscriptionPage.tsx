@@ -234,7 +234,7 @@ const SubscriptionPage: React.FC = () => {
   if (loadingPkgs || loadingSub) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Spin size="large" tip="Đang tải thông tin gói..." />
+        <Spin size="large" description="Đang tải thông tin gói..." />
       </div>
     );
   }

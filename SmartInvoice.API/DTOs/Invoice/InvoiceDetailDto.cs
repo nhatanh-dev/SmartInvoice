@@ -92,6 +92,9 @@ public class ValidationLayerDto
     public int LayerOrder { get; set; }
     public bool IsValid { get; set; }
     public string ValidationStatus { get; set; } = null!;
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? Suggestion { get; set; }
     public string? ErrorDetails { get; set; }
     public DateTime CheckedAt { get; set; }
 }

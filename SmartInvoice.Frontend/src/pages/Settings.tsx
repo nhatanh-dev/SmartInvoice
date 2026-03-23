@@ -156,7 +156,7 @@ const Settings: React.FC = () => {
       <div style={{ display: "flex", gap: 24 }}>
         {/* Sidebar Tabs */}
         <div style={{ width: 250, flexShrink: 0 }}>
-          <Card bodyStyle={{ padding: 0 }} className="settings-sidebar">
+          <Card styles={{ body: { padding: 0 } }} className="settings-sidebar">
             <div
               style={{
                 padding: "16px 20px",
@@ -219,7 +219,7 @@ const Settings: React.FC = () => {
           {activeTab === "profile" && (
             <Card
               title="Hồ sơ cá nhân"
-              bordered={false}
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,
@@ -271,7 +271,7 @@ const Settings: React.FC = () => {
           {activeTab === "notifications" && (
             <Card
               title="Cài đặt thông báo"
-              bordered={false}
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,
@@ -352,8 +352,8 @@ const Settings: React.FC = () => {
 
           {isCompanyAdmin && activeTab === "company" && company && (
             <Card
-              title="Cấu hình Luồng duyệt"
-              bordered={false}
+              title="Cấu hình Công ty & Luồng duyệt"
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,

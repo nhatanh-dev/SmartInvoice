@@ -57,6 +57,8 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
     {
       label: "Hóa đơn không bị trùng lặp",
       errorCodes: [
+        "ERR_LOGIC_DUP",
+        "ERR_LOGIC_DUP_REJECTED",
         "ERR_LOGIC_DUPLICATE",
         "ERR_LOGIC_DUPLICATE_REJECTED",
         "LogicDuplicate",
@@ -83,7 +85,7 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
         "SigExpired",
         "SigInvalid",
       ],
-      warningCodes: [],
+      warningCodes: ["WARN_MISSING_XML_EVIDENCE"],
     },
     {
       label: "Ngày ký và ngày lập hợp lý",
@@ -101,9 +103,15 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
         "ERR_LOGIC_TOTAL_MISMATCH",
         "ERR_LOGIC_SALES_TOTAL_MISMATCH",
         "ERR_LOGIC_TAX_RATE",
+        "ERR_OCR_INTERNAL_VALIDATION",
         "LogicTotalMismatch",
       ],
-      warningCodes: ["WARN_LOGIC_CALC_DEV", "WARN_LOGIC_TAX_MISMATCH"],
+      warningCodes: [
+        "WARN_LOGIC_CALC_DEV",
+        "WARN_LOGIC_TAX_MISMATCH",
+        "WARN_LOGIC_CALC_DEV_OCR",
+        "WARN_LOGIC_TAX_MISMATCH_OCR",
+      ],
     },
   ];
 
@@ -170,7 +178,7 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
     (totalAmount ? totalAmount - (totalPreTax || 0) : 0);
 
   return (
-    <Card bordered={false} style={{ background: "#fafafa", margin: "16px 0" }}>
+    <Card variant="borderless" style={{ background: "#fafafa", margin: "16px 0" }}>
       <Row gutter={[24, 24]}>
         {/* CỘT TRÁI: THÔNG TIN THANH TOÁN */}
         <Col xs={24} lg={10}>
@@ -226,7 +234,7 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
               border: "1px solid #f0f0f0",
             }}
           >
-            <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Space orientation="vertical" size="large" style={{ width: "100%" }}>
               {criteria.map((c, index) => (
                 <Row key={index} justify="start" align="top" wrap={false}>
                   <Col style={{ marginRight: 12, display: "flex" }}>

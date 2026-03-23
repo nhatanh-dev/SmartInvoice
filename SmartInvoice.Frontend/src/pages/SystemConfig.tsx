@@ -234,9 +234,9 @@ const SystemConfig: React.FC = () => {
       </div>
 
       <Card
-        bordered={false}
+        variant="borderless"
         style={{ borderRadius: 12 }}
-        bodyStyle={{ padding: "0 24px 24px 24px" }}
+        styles={{ body: { padding: "0 24px 24px 24px" } }}
       >
         <Tabs
           activeKey={activeTab}
@@ -321,7 +321,7 @@ const SystemConfig: React.FC = () => {
                               <Descriptions.Item
                                 key={config.configKey}
                                 label={
-                                  <Space direction="vertical" size={0}>
+                                  <Space orientation="vertical" size={0}>
                                     <Text strong style={{ fontSize: 13 }}>
                                       {config.description || config.configKey}
                                     </Text>

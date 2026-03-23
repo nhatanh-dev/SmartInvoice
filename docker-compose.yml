@@ -73,16 +73,9 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - DEVICE=cuda
+      - DEVICE=cpu
       - HOST=0.0.0.0
       - PORT=5000
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     volumes:
       - ./invoice_ocr:/app
     networks:

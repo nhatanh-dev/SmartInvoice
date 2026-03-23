@@ -655,7 +655,7 @@ const InvoiceDetail: React.FC = () => {
                     <BankOutlined /> Người bán
                   </span>
                 }
-                bordered={false}
+                variant="borderless"
                 style={{
                   marginBottom: 16,
                   borderRadius: 12,
@@ -683,7 +683,7 @@ const InvoiceDetail: React.FC = () => {
                     <UserOutlined /> Người mua
                   </span>
                 }
-                bordered={false}
+                variant="borderless"
                 style={{
                   marginBottom: 16,
                   borderRadius: 12,
@@ -705,7 +705,7 @@ const InvoiceDetail: React.FC = () => {
                 <DollarOutlined /> Số tiền
               </span>
             }
-            bordered={false}
+            variant="borderless"
             style={{
               marginBottom: 16,
               borderRadius: 12,
@@ -763,7 +763,7 @@ const InvoiceDetail: React.FC = () => {
                 <CalendarOutlined /> Dòng thời gian
               </span>
             }
-            bordered={false}
+            variant="borderless"
             style={{ borderRadius: 12 }}
           >
             <Row gutter={24}>
@@ -891,7 +891,7 @@ const InvoiceDetail: React.FC = () => {
         <Timeline
           items={invoice.auditLogs.map((log) => ({
             color: actionColorMap[log.action] || "#8c8c8c",
-            children: (
+            content: (
               <div key={log.auditId}>
                 <Space>
                   <Tag color={actionColorMap[log.action] || "default"}>
@@ -1032,7 +1032,7 @@ const InvoiceDetail: React.FC = () => {
                          <Text type="secondary" style={{ fontSize: 12 }}>
                            — {dayjs(v.createdAt).format('DD/MM/YYYY HH:mm')}
                          </Text>
-                         {v.invoiceId === id && <Tag color="blue" bordered={false}>Hiện tại</Tag>}
+                         {v.invoiceId === id && <Tag color="blue" variant="filled">Hiện tại</Tag>}
                        </Space>
                      ),
                      onClick: () => {
@@ -1088,9 +1088,9 @@ const InvoiceDetail: React.FC = () => {
 
       {/* Content Tabs */}
       <Card
-        bordered={false}
+        variant="borderless"
         className="bg-dash-card rounded-[14px] shadow-dash"
-        bodyStyle={{ padding: "16px 24px" }}
+        styles={{ body: { padding: "16px 24px" } }}
       >
         <Tabs defaultActiveKey="info" items={tabItems} />
       </Card>

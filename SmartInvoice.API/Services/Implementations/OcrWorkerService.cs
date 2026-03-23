@@ -217,7 +217,7 @@ public class OcrWorkerService : BackgroundService
         finalWarnings.AddRange(logicResult.WarningDetails ?? new List<ValidationErrorDetail>());
 
         // Check for fatal errors (duplicate / not owner)
-        // NOTE: Do NOT return early — always flow through Steps 4-6 so FileStorage & ExtractedData are saved.
+        // Dừng và xóa Draft Invoice nếu lỗi nghiêm trọng (giống luồng XML) để tránh lưu dữ liệu rác
         var fatalErrorCodes = new HashSet<string> { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected, ErrorCodes.LogicOwner };
         var hasFatalError = finalErrors.Any(e =>
             !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode));
@@ -225,8 +225,17 @@ public class OcrWorkerService : BackgroundService
         if (hasFatalError)
         {
             var fatalErr = finalErrors.First(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!));
-            _logger.LogWarning("[OCR_WORKER STEP 3/7] ⚠️ FATAL ERROR detected — will mark as Rejected but continue processing.");
+            _logger.LogWarning("[OCR_WORKER STEP 3/7] ⚠️ FATAL ERROR detected — deleting draft invoice and aborting to prevent junk data.");
             _logger.LogWarning("   └─ {ErrorCode}: {ErrorMessage}", fatalErr.ErrorCode, fatalErr.ErrorMessage);
+
+            var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
+            if (draftInvoice != null)
+            {
+                unitOfWork.Invoices.Remove(draftInvoice);
+                await unitOfWork.CompleteAsync();
+                _logger.LogInformation("Deleted draft invoice {InvoiceId} due to fatal error.", job.InvoiceId);
+            }
+            return;
         }
 
         // ══════════════════════════════════════════════════
@@ -327,38 +336,40 @@ public class OcrWorkerService : BackgroundService
             ? finalErrors.FirstOrDefault(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!))?.ErrorMessage ?? "Hóa đơn có lỗi nghiêm trọng."
             : (isCompletelyValid ? "Hóa đơn từ OCR, cần bổ sung file XML gốc để xác thực pháp lý." : "Hóa đơn có lỗi, cần kiểm tra lại.");
 
+        string? Trunc(string? val, int max) => val?.Length > max ? val[..max] : val;
+
         // Map key fields
-        invoice.InvoiceNumber = extractedData?.InvoiceNumber ?? "UNKNOWN";
-        invoice.FormNumber = extractedData?.InvoiceTemplateCode;
-        invoice.SerialNumber = extractedData?.InvoiceSymbol;
-        invoice.InvoiceCurrency = extractedData?.InvoiceCurrency ?? "VND";
+        invoice.InvoiceNumber = Trunc(extractedData?.InvoiceNumber, 50) ?? "UNKNOWN";
+        invoice.FormNumber = Trunc(extractedData?.InvoiceTemplateCode, 20);
+        invoice.SerialNumber = Trunc(extractedData?.InvoiceSymbol, 50);
+        invoice.InvoiceCurrency = Trunc(extractedData?.InvoiceCurrency, 3) ?? "VND";
         invoice.ExchangeRate = extractedData?.ExchangeRate ?? 1;
         invoice.TotalAmountBeforeTax = extractedData?.TotalPreTax;
         invoice.TotalTaxAmount = extractedData?.TotalTaxAmount;
         invoice.TotalAmount = extractedData?.TotalAmount ?? 0;
         invoice.TotalAmountInWords = extractedData?.TotalAmountInWords;
-        invoice.PaymentMethod = extractedData?.PaymentTerms;
-        invoice.MCCQT = extractedData?.MCCQT;
+        invoice.PaymentMethod = Trunc(extractedData?.PaymentTerms, 100);
+        invoice.MCCQT = Trunc(extractedData?.MCCQT, 50);
 
         if (extractedData?.InvoiceDate != null)
             invoice.InvoiceDate = DateTime.SpecifyKind(extractedData.InvoiceDate.Value, DateTimeKind.Utc);
 
         if (invoice.Seller == null) invoice.Seller = new SellerInfo();
-        invoice.Seller.Name = extractedData?.SellerName;
-        invoice.Seller.TaxCode = extractedData?.SellerTaxCode;
+        invoice.Seller.Name = Trunc(extractedData?.SellerName, 200);
+        invoice.Seller.TaxCode = Trunc(extractedData?.SellerTaxCode, 14);
         invoice.Seller.Address = extractedData?.SellerAddress;
-        invoice.Seller.Phone = extractedData?.SellerPhone;
-        invoice.Seller.Email = extractedData?.SellerEmail;
-        invoice.Seller.BankAccount = extractedData?.SellerBankAccount;
-        invoice.Seller.BankName = extractedData?.SellerBankName;
+        invoice.Seller.Phone = Trunc(extractedData?.SellerPhone, 20);
+        invoice.Seller.Email = Trunc(extractedData?.SellerEmail, 100);
+        invoice.Seller.BankAccount = Trunc(extractedData?.SellerBankAccount, 50);
+        invoice.Seller.BankName = Trunc(extractedData?.SellerBankName, 200);
 
         if (invoice.Buyer == null) invoice.Buyer = new BuyerInfo();
-        invoice.Buyer.Name = extractedData?.BuyerName;
-        invoice.Buyer.TaxCode = extractedData?.BuyerTaxCode;
+        invoice.Buyer.Name = Trunc(extractedData?.BuyerName, 200);
+        invoice.Buyer.TaxCode = Trunc(extractedData?.BuyerTaxCode, 14);
         invoice.Buyer.Address = extractedData?.BuyerAddress;
-        invoice.Buyer.Phone = extractedData?.BuyerPhone;
-        invoice.Buyer.Email = extractedData?.BuyerEmail;
-        invoice.Buyer.ContactPerson = extractedData?.BuyerContactPerson;
+        invoice.Buyer.Phone = Trunc(extractedData?.BuyerPhone, 20);
+        invoice.Buyer.Email = Trunc(extractedData?.BuyerEmail, 100);
+        invoice.Buyer.ContactPerson = Trunc(extractedData?.BuyerContactPerson, 100);
 
         // ── Determine document type ──
         var docTypes = await unitOfWork.DocumentTypes.GetAllAsync();

@@ -103,7 +103,7 @@ const Dashboard: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Spin size="large" tip="Đang tải dữ liệu..." />
+        <Spin size="large" description="Đang tải dữ liệu..." />
       </div>
     );
   }

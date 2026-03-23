@@ -2508,6 +2508,8 @@ def stage4_postprocess(
 # ──────────────────────────────────────────────────────────────────
 def _normalize_date(value: Any) -> Optional[str]:
     """Normalize date string → ISO 8601 (YYYY-MM-DD)."""
+    if isinstance(value, dict):
+        value = value.get("value")
     if not value:
         return None
     s = str(value).strip()
@@ -2543,6 +2545,8 @@ def _normalize_date(value: Any) -> Optional[str]:
 
 def _normalize_amount(value: Any) -> Optional[float]:
     """Parse Vietnamese number format. "5.000.000" → 5000000.0"""
+    if isinstance(value, dict):
+        value = value.get("value")
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -2557,6 +2561,8 @@ def _normalize_amount(value: Any) -> Optional[float]:
 
 
 def _normalize_tax_code(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        value = value.get("value")
     if not value:
         return None
     s = str(value).strip()
@@ -2564,6 +2570,8 @@ def _normalize_tax_code(value: Any) -> Optional[str]:
 
 
 def _normalize_vat_rate(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        value = value.get("value")
     if value is None:
         return None
     s = str(value).strip()
@@ -2588,28 +2596,32 @@ def stage5_format(raw: Dict, filename: str, elapsed_ms: float) -> Dict:
     result = copy.deepcopy(raw)
 
     if "invoice" in result and isinstance(result["invoice"], dict):
-        result["invoice"]["date"] = _normalize_date(result["invoice"].get("date"))
+        if "date" in result["invoice"]:
+            field_val = result["invoice"]["date"]
+            normalized = _normalize_date(field_val)
+            if isinstance(field_val, dict):
+                field_val["value"] = normalized
+            else:
+                result["invoice"]["date"] = normalized
 
     if "invoice" in result and isinstance(result["invoice"], dict):
         for amount_field in ("total_amount", "vat_amount", "subtotal"):
             if amount_field in result["invoice"]:
                 field_obj = result["invoice"][amount_field]
-                # Extract value from dict format if needed
+                normalized = _normalize_amount(field_obj)
                 if isinstance(field_obj, dict):
-                    raw_val = field_obj.get("value", 0)
-                    normalized = _normalize_amount(raw_val)
-                    if normalized is not None:
-                        field_obj["value"] = normalized
+                    field_obj["value"] = normalized
                 else:
-                    normalized = _normalize_amount(field_obj)
-                    if normalized is not None:
-                        result["invoice"][amount_field] = normalized
+                    result["invoice"][amount_field] = normalized
 
     if "invoice" in result and isinstance(result["invoice"], dict):
         if "vat_rate" in result["invoice"]:
-            result["invoice"]["vat_rate"] = _normalize_vat_rate(
-                result["invoice"].get("vat_rate")
-            )
+            field_val = result["invoice"]["vat_rate"]
+            normalized = _normalize_vat_rate(field_val)
+            if isinstance(field_val, dict):
+                field_val["value"] = normalized
+            else:
+                result["invoice"]["vat_rate"] = normalized
 
     for item in result.get("items", []):
         if not isinstance(item, dict):
@@ -2617,26 +2629,28 @@ def stage5_format(raw: Dict, filename: str, elapsed_ms: float) -> Dict:
         for item_field in ("quantity", "unit_price", "discount", "line_tax", "total", "row_total"):
             if item_field in item:
                 field_obj = item[item_field]
-                # Extract value from dict format if needed
+                normalized = _normalize_amount(field_obj)
                 if isinstance(field_obj, dict):
-                    raw_val = field_obj.get("value", 0)
-                    normalized = _normalize_amount(raw_val)
-                    if normalized is not None:
-                        # Update only the "value" field, preserve confidence
-                        field_obj["value"] = normalized
+                    field_obj["value"] = normalized
                 else:
-                    # Raw value, normalize directly
-                    normalized = _normalize_amount(field_obj)
-                    if normalized is not None:
-                        item[item_field] = normalized
+                    item[item_field] = normalized
         if "vat_rate" in item:
-            item["vat_rate"] = _normalize_vat_rate(item.get("vat_rate"))
+            field_val = item["vat_rate"]
+            normalized = _normalize_vat_rate(field_val)
+            if isinstance(field_val, dict):
+                field_val["value"] = normalized
+            else:
+                item["vat_rate"] = normalized
 
     for party in ("seller", "buyer"):
         if party in result and isinstance(result[party], dict):
-            result[party]["tax_code"] = _normalize_tax_code(
-                result[party].get("tax_code")
-            )
+            if "tax_code" in result[party]:
+                field_val = result[party]["tax_code"]
+                normalized = _normalize_tax_code(field_val)
+                if isinstance(field_val, dict):
+                    field_val["value"] = normalized
+                else:
+                    result[party]["tax_code"] = normalized
 
     validation = result.pop("_validation", None)
 
@@ -2687,10 +2701,7 @@ def run_full_pipeline(
 
         img_bgr, w, h = pages[0]
 
-        t = time.monotonic()
-        _, words, bboxes = stage2_ocr(mm, img_bgr, w, h, temp_dir, uid, log)
-        met.record_stage("2_ocr", (time.monotonic() - t) * 1000)
-        log.info("Stage 2 ✅ ocr  words=%d", len(words))
+        words, bboxes = [], []
 
         # ── Stage 3+4: Gemini Flash (primary) or LayoutLMv3 (fallback) ──────
         raw_result = None
@@ -2715,7 +2726,7 @@ def run_full_pipeline(
                     try:
                         raw_result = GEMINI_EXTRACTOR.extract(
                             image_bytes=_gemini_bytes,
-                            ocr_words=words,
+                            ocr_words=None,
                             mime_type="image/jpeg",
                         )
                         if raw_result:
@@ -2737,6 +2748,11 @@ def run_full_pipeline(
 
         # --- Local Model Extraction Logic (Fallback / Default) ---
         if raw_result is None:
+            t = time.monotonic()
+            _, words, bboxes = stage2_ocr(mm, img_bgr, w, h, temp_dir, uid, log)
+            met.record_stage("2_ocr", (time.monotonic() - t) * 1000)
+            log.info("Stage 2 ✅ ocr  words=%d", len(words))
+
             t = time.monotonic()
             log.info("Executing local LayoutLMv3 models (Stage 3 & 4)...")
             (header_labels, header_confs,

@@ -45,11 +45,28 @@ class InvoiceValidator:
             return float(v)
         try:
             s = str(v).strip()
+            # If it's a multi-value string like "10%,8%", don't try to parse as a single float
+            if "," in s and "%" in s:
+                return None
+            
             # Remove % sign
             s = s.replace("%", "").strip()
             # Vietnamese format: "5.000.000,50" -> "5000000.50"
-            s = s.replace(".", "")
-            s = s.replace(",", ".")
+            if "," in s and "." in s:
+                # Mixed: assume . is thousands, , is decimal
+                s = s.replace(".", "").replace(",", ".")
+            elif "," in s:
+                # Comma only: could be thousands or decimal. 
+                # If followed by 3 digits, likely thousands.
+                if re.search(r',\d{3}(?!\d)', s):
+                    s = s.replace(",", "")
+                else:
+                    s = s.replace(",", ".")
+            elif "." in s:
+                # Dot only: could be thousands or decimal.
+                if re.search(r'\.\d{3}(?!\d)', s):
+                    s = s.replace(".", "")
+            
             return float(s) if s else None
         except Exception:
             return None
@@ -64,12 +81,15 @@ class InvoiceValidator:
         entry individually: entry.vat_amount ≈ entry.taxable_amount × rate.
         Otherwise fall back to the single-rate check.
         """
-        errors = []
+        warnings = []
         inv = data.get("invoice", {}) or {}
 
         # ── Multi-VAT: per-entry validation ──────────────────────────
         vat_breakdown = inv.get("vat_breakdown", [])
         if vat_breakdown and isinstance(vat_breakdown, list):
+            total_expected_vat = 0.0
+            actual_vat_sum = 0.0
+            
             for entry in vat_breakdown:
                 if not isinstance(entry, dict):
                     continue
@@ -78,26 +98,44 @@ class InvoiceValidator:
                 taxable = self._to_float(entry.get("taxable_amount"))
                 vat_amt = self._to_float(entry.get("vat_amount"))
 
-                if None in (rate, taxable, vat_amt):
+                if None in (rate, taxable):
                     continue
-                if rate == 0 or taxable == 0:
-                    continue
-
+                
                 # Normalize: 10 → 0.10
                 if rate > 1:
                     rate = rate / 100.0
 
-                expected_vat = taxable * rate
-                if expected_vat > 0:
-                    diff_ratio = abs(vat_amt - expected_vat) / expected_vat
+                expected_entry_vat = taxable * rate
+                total_expected_vat += expected_entry_vat
+                
+                if vat_amt is not None:
+                    actual_vat_sum += vat_amt
+                    if expected_entry_vat > 0 and vat_amt > 0:
+                        diff_ratio = abs(vat_amt - expected_entry_vat) / expected_entry_vat
+                        if diff_ratio > self.vat_tolerance:
+                            warnings.append(
+                                f"VAT breakdown mismatch ({entry.get('rate', '?')}): "
+                                f"vat_amount={vat_amt:.0f} expected≈{expected_entry_vat:.0f} "
+                                f"(diff={diff_ratio:.1%})"
+                            )
+
+            # Final aggregate check if breakdown amounts were zero or missing
+            if actual_vat_sum == 0:
+                # Check against global vat_amount or total - subtotal
+                global_vat = self._to_float(inv.get("vat_amount"))
+                subtotal = self._to_float(inv.get("subtotal"))
+                total = self._to_float(inv.get("total_amount"))
+                
+                effective_vat = global_vat if (global_vat and global_vat > 0) else (total - subtotal if (total and subtotal) else 0)
+                
+                if total_expected_vat > 0 and effective_vat > 0:
+                    diff_ratio = abs(effective_vat - total_expected_vat) / total_expected_vat
                     if diff_ratio > self.vat_tolerance:
-                        errors.append(
-                            f"VAT breakdown mismatch ({entry.get('rate', '?')}): "
-                            f"vat_amount={vat_amt:.0f} "
-                            f"expected≈{expected_vat:.0f} "
-                            f"(diff={diff_ratio:.1%} > tolerance={self.vat_tolerance:.0%})"
+                        warnings.append(
+                            f"Aggregate VAT mismatch: total_vat_extracted={effective_vat:.0f} "
+                            f"expected≈{total_expected_vat:.0f} (diff={diff_ratio:.1%})"
                         )
-            return errors
+            return warnings
 
         # ── Single-VAT: original logic ───────────────────────────────
         vat_rate   = self._to_float(inv.get("vat_rate"))
@@ -105,9 +143,9 @@ class InvoiceValidator:
         subtotal   = self._to_float(inv.get("subtotal"))
 
         if None in (vat_rate, vat_amount, subtotal):
-            return errors
+            return warnings
         if subtotal == 0 or vat_rate == 0:
-            return errors
+            return warnings
 
         # Normalize vat_rate: 10 → 0.10
         rate = vat_rate
@@ -118,13 +156,13 @@ class InvoiceValidator:
         if expected_vat > 0:
             diff_ratio = abs(vat_amount - expected_vat) / expected_vat
             if diff_ratio > self.vat_tolerance:
-                errors.append(
+                warnings.append(
                     f"VAT rate mismatch: vat_amount={vat_amount:.0f} "
                     f"expected≈{expected_vat:.0f} "
                     f"(diff={diff_ratio:.1%} > tolerance={self.vat_tolerance:.0%})"
                 )
 
-        return errors
+        return warnings
 
     def _check_total_sum(self, data: Dict[str, Any]) -> List[str]:
         """
@@ -133,7 +171,7 @@ class InvoiceValidator:
         When vat_breakdown is present, sums VAT amounts from all breakdown
         entries instead of using the single invoice-level vat_amount.
         """
-        errors = []
+        warnings = []
         inv = data.get("invoice", {}) or {}
 
         subtotal    = self._to_float(inv.get("subtotal"))
@@ -149,25 +187,35 @@ class InvoiceValidator:
                 v = self._to_float(entry.get("vat_amount"))
                 if v is not None:
                     vat_amount += v
+            
+            # If breakdown had no vat amounts, try to use global or deduce
+            if vat_amount == 0:
+                global_v = self._to_float(inv.get("vat_amount"))
+                if global_v and global_v > 0:
+                    vat_amount = global_v
+                elif total and subtotal:
+                    vat_amount = total - subtotal
         else:
             vat_amount = self._to_float(inv.get("vat_amount"))
+            if (vat_amount is None or vat_amount == 0) and total and subtotal:
+                vat_amount = total - subtotal
 
         if None in (subtotal, vat_amount, total):
-            return errors
+            return warnings
         if subtotal == 0 and vat_amount == 0 and total == 0:
-            return errors
+            return warnings
 
         expected_total = subtotal + vat_amount
         diff = abs(total - expected_total)
 
         if diff > max(self.amount_tolerance, abs(total) * self.vat_tolerance):
-            errors.append(
+            warnings.append(
                 f"Total sum mismatch: subtotal({subtotal:.0f}) + vat_amount({vat_amount:.0f}) "
                 f"= {expected_total:.0f}, but total_amount = {total:.0f} "
                 f"(diff={diff:.0f})"
             )
 
-        return errors
+        return warnings
 
     def _check_item_rows(self, data: Dict[str, Any]) -> List[str]:
         """
@@ -215,12 +263,13 @@ class InvoiceValidator:
 
     def _check_tax_codes(self, data: Dict[str, Any]) -> List[str]:
         """Check tax code format: 10, 13, or 10-3 digits."""
-        errors  = []
+        warnings = []
         # Valid Vietnamese MST patterns:
         VALID_TAX_PATTERNS = [
-            r'\d{10}',        # Standard company MST
-            r'\d{10}-\d{3}',  # Branch office MST
-            r'\d{13}',        # Household / personal business MST
+            r'^\d{10}$',        # 10 digits
+            r'^\d{13}$',        # 13 digits
+            r'^\d{10}-\d{3}$',    # 10-3 format
+            r'^\d{12}$'         # 12 digits (newly allowed)
         ]
 
         for party in ("seller", "buyer"):
@@ -236,12 +285,12 @@ class InvoiceValidator:
             tc_clean = str(tc).replace(" ", "").replace(".", "")
             
             if not any(re.fullmatch(p, tc_clean) for p in VALID_TAX_PATTERNS):
-                errors.append(
+                warnings.append(
                     f"{party}.tax_code '{tc}' invalid "
                     f"(must be 10 digits, 13 digits, or 10-3 format)"
                 )
 
-        return errors
+        return warnings
 
     def _check_confidence(self, data: Dict[str, Any]) -> List[str]:
         """Check fields with confidence below threshold."""
@@ -293,9 +342,9 @@ class InvoiceValidator:
         errors   = []
         warnings = []
 
-        errors   += self._check_vat_rate(data)
-        errors   += self._check_total_sum(data)
-        errors   += self._check_tax_codes(data)
+        warnings += self._check_vat_rate(data)
+        warnings += self._check_total_sum(data)
+        warnings += self._check_tax_codes(data)
         warnings += self._check_item_rows(data)
         warnings += self._check_confidence(data)
         warnings += self._check_missing_fields(data)

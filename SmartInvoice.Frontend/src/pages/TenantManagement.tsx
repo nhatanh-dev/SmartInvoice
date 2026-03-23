@@ -153,7 +153,7 @@ const TenantManagement: React.FC = () => {
                 <Text type="secondary">Giám sát tài nguyên và trạng thái đăng ký của các công ty trên nền tảng SmartInvoice Shield.</Text>
             </div>
 
-            <Card bordered={false} style={{ borderRadius: 12 }}>
+            <Card variant="borderless" style={{ borderRadius: 12 }}>
                 <Row style={{ marginBottom: 16 }}>
                     <Col span={8}>
                         <Input 
