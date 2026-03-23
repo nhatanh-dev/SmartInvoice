@@ -41,6 +41,7 @@ import {
   MoreOutlined,
 } from "@ant-design/icons";
 import { invoiceService, ValidationResult } from "../services/invoice";
+import OcrReviewModal from "../components/OcrReviewModal";
 import { useNavigate } from "react-router-dom";
 import ValidationChecklist from "../components/ValidationChecklist";
 import BusinessValidationSummary from "../components/BusinessValidationSummary";
@@ -91,6 +92,7 @@ interface ProcessResult {
   invoiceId?: string;
   submitStatus: SubmitStatus;
   submitError?: string;
+  processingMethod: "XML" | "OCR";
 }
 
 const UploadInvoice: React.FC = () => {
@@ -109,6 +111,10 @@ const UploadInvoice: React.FC = () => {
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(
     null,
   );
+
+  // OCR Review Modal State
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [reviewInvoiceId, setReviewInvoiceId] = useState<string | null>(null);
 
   const getDefaultSelected = (res: ProcessResult[]) =>
     res
@@ -198,6 +204,7 @@ const UploadInvoice: React.FC = () => {
       fileSize: f.size,
       status: "pending",
       submitStatus: "idle",
+      processingMethod: activeTab === "xml" ? "XML" : "OCR",
     }));
     setResults(initialResults);
     setSelectedRowKeys([]);
@@ -348,12 +355,22 @@ const UploadInvoice: React.FC = () => {
             );
 
             // Step 3: Map InvoiceDetailDto → ProcessResult
-            const isFailed = detail.status === "Failed" || detail.status === "Rejected";
-            const hasWarnings = detail.riskLevel === "Yellow" || detail.riskLevel === "Orange";
+            const isFailed =
+              detail.status === "Failed" || detail.status === "Rejected";
+            const hasWarnings =
+              detail.riskLevel === "Yellow" || detail.riskLevel === "Orange";
 
             // Build validation-like result from detail
-            const warningDetails: Array<{ errorCode: string | null; errorMessage: string | null; suggestion: string | null }> = [];
-            const errorDetails: Array<{ errorCode: string | null; errorMessage: string | null; suggestion: string | null }> = [];
+            const warningDetails: Array<{
+              errorCode: string | null;
+              errorMessage: string | null;
+              suggestion: string | null;
+            }> = [];
+            const errorDetails: Array<{
+              errorCode: string | null;
+              errorMessage: string | null;
+              suggestion: string | null;
+            }> = [];
 
             // Extract from validationLayers
             if (detail.validationLayers) {
@@ -362,41 +379,103 @@ const UploadInvoice: React.FC = () => {
                   errorDetails.push({
                     errorCode: layer.errorCode,
                     errorMessage: layer.errorMessage,
-                    suggestion: null,
+                    suggestion: layer.suggestion,
                   });
-                } else if (layer.validationStatus === "Warning" || layer.validationStatus === "WARNING") {
+                } else if (
+                  layer.validationStatus === "Warning" ||
+                  layer.validationStatus === "WARNING"
+                ) {
                   warningDetails.push({
                     errorCode: layer.errorCode,
                     errorMessage: layer.errorMessage,
-                    suggestion: null,
+                    suggestion: layer.suggestion,
                   });
                 }
               }
             }
 
+            // Extract from riskChecks (specifically AUTO_UPLOAD_VALIDATION)
+            if (detail.riskChecks) {
+              const autoCheck = detail.riskChecks.find(
+                (rc: any) => rc.checkType === "AUTO_UPLOAD_VALIDATION",
+              );
+              if (autoCheck && autoCheck.checkDetails) {
+                try {
+                  const details = JSON.parse(autoCheck.checkDetails);
+                  if (details.ErrorDetails) {
+                    details.ErrorDetails.forEach((err: any) => {
+                      const code = err.ErrorCode || err.errorCode;
+                      const msg = err.ErrorMessage || err.errorMessage;
+                      const sugg = err.Suggestion || err.suggestion;
+
+                      if (!errorDetails.some((e) => e.errorCode === code)) {
+                        errorDetails.push({
+                          errorCode: code,
+                          errorMessage: msg,
+                          suggestion: sugg,
+                        });
+                      }
+                    });
+                  }
+                  if (details.WarningDetails) {
+                    details.WarningDetails.forEach((warn: any) => {
+                      if (
+                        !warningDetails.some(
+                          (w) => w.errorCode === warn.errorCode,
+                        )
+                      ) {
+                        warningDetails.push({
+                          errorCode: warn.errorCode || warn.errorCode,
+                          errorMessage: warn.errorMessage || warn.errorMessage,
+                          suggestion: warn.suggestion || warn.suggestion,
+                        });
+                      }
+                    });
+                  }
+                } catch (e) {
+                  console.error("Failed to parse riskCheck details", e);
+                }
+              }
+            }
+
             // If OCR-only, add a default warning if nothing else
-            if (!isFailed && warningDetails.length === 0 && errorDetails.length === 0) {
+            // Đối với luồng OCR, LUÔN LUÔN cảnh báo thiếu bằng chứng chữ ký số (trừ khi đã có)
+            if (
+              !isFailed &&
+              !warningDetails.some(
+                (w) => w.errorCode === "WARN_MISSING_XML_EVIDENCE",
+              )
+            ) {
               warningDetails.push({
                 errorCode: "WARN_MISSING_XML_EVIDENCE",
-                errorMessage: "Hóa đơn từ OCR, cần bổ sung XML để xác thực pháp lý.",
-                suggestion: "Tải lên file XML gốc để xác thực chữ ký số.",
+                errorMessage:
+                  "Hóa đơn xử lý qua OCR, không thể xác thực chữ ký số.",
+                suggestion:
+                  "Nên đính kèm file XML gốc để hệ thống kiểm tra tính pháp lý.",
               });
             }
 
             const ocrValidation: ValidationResultExtended = {
               isValid: !isFailed,
-              errors: errorDetails.map(e => e.errorMessage || ""),
-              warnings: warningDetails.map(w => w.errorMessage || ""),
+              errors: errorDetails.map((e) => e.errorMessage || ""),
+              warnings: warningDetails.map((w) => w.errorMessage || ""),
               errorDetails,
               warningDetails,
               signerSubject: null,
-              extractedData: null,
+              extractedData:
+                detail.extractedData ||
+                ({
+                  totalAmount: detail.totalAmount,
+                  totalPreTax: detail.totalAmountBeforeTax,
+                  totalTaxAmount: detail.totalTaxAmount,
+                } as any),
               invoiceId: detail.invoiceId,
             };
 
             let finalErrorMessage = undefined;
             if (isFailed) {
-              finalErrorMessage = detail.notes || errorDetails[0]?.errorMessage || "OCR thất bại";
+              finalErrorMessage =
+                detail.notes || errorDetails[0]?.errorMessage || "OCR thất bại";
             } else if (warningDetails.length > 0) {
               finalErrorMessage = warningDetails[0]?.errorMessage || undefined;
             }
@@ -641,6 +720,23 @@ const UploadInvoice: React.FC = () => {
         icon: <EyeOutlined />,
         label: "Xem chi tiết",
         onClick: () => handleOpenInvoiceDetail(record.invoiceId!),
+      });
+    }
+
+    // Soát lỗi & Chỉnh sửa (OCR only)
+    if (
+      record.invoiceId &&
+      record.processingMethod?.toUpperCase() === "OCR" &&
+      (record.status === "success" || record.status === "warning")
+    ) {
+      menuItems.push({
+        key: "ocr-review",
+        icon: <EditOutlined />,
+        label: "Soát lỗi & Chỉnh sửa",
+        onClick: () => {
+          setReviewInvoiceId(record.invoiceId!);
+          setReviewModalVisible(true);
+        },
       });
     }
 
@@ -974,9 +1070,9 @@ const UploadInvoice: React.FC = () => {
       </div>
 
       <Card
-        bordered={false}
+        variant="borderless"
         style={{ borderRadius: 12, marginBottom: 24 }}
-        bodyStyle={{ paddingBottom: results.length > 0 ? 0 : undefined }}
+        styles={{ body: { paddingBottom: results.length > 0 ? 0 : undefined } }}
       >
         <Steps
           current={currentStep}
@@ -1027,174 +1123,179 @@ const UploadInvoice: React.FC = () => {
                 activeKey={activeTab}
                 onChange={handleTabChange}
                 type="card"
-              >
-                <Tabs.TabPane
-                  key="xml"
-                  tab={
-                    <span>
-                      <FileTextOutlined /> Tải lên Hóa đơn gốc (XML)
-                    </span>
-                  }
-                >
-                  <Dragger
-                    {...uploadProps}
-                    style={
-                      fileList.length === 0
-                        ? {
-                            padding: "80px 20px",
-                            borderRadius: 16,
-                            background: "#f8fafc",
-                            border: "2px dashed #cbd5e1",
-                            width: "100%",
-                            maxWidth: 800,
-                            margin: "0 auto",
-                          }
-                        : {
-                            padding: "60px 10px",
-                            borderRadius: 8,
-                            background: "#fafbfc",
-                            height: "100%",
-                            borderColor: "#1677ff40",
-                          }
-                    }
-                  >
-                    <p className="ant-upload-drag-icon">
-                      <CloudUploadOutlined
+                items={[
+                  {
+                    key: "xml",
+                    label: (
+                      <span>
+                        <FileTextOutlined /> Tải lên Hóa đơn gốc (XML)
+                      </span>
+                    ),
+                    children: (
+                      <Dragger
+                        {...uploadProps}
                         style={
                           fileList.length === 0
-                            ? { fontSize: 64, color: "#1677ff" }
-                            : { fontSize: 48, color: "#1677ff" }
+                            ? {
+                                padding: "80px 20px",
+                                borderRadius: 16,
+                                background: "#f8fafc",
+                                border: "2px dashed #cbd5e1",
+                                width: "100%",
+                                maxWidth: 800,
+                                margin: "0 auto",
+                              }
+                            : {
+                                padding: "60px 10px",
+                                borderRadius: 8,
+                                background: "#fafbfc",
+                                height: "100%",
+                                borderColor: "#1677ff40",
+                              }
                         }
-                      />
-                    </p>
-                    <p
-                      className="ant-upload-text"
-                      style={{
-                        fontSize: fileList.length === 0 ? 18 : 16,
-                        fontWeight: 500,
-                        marginBottom: 8,
-                        marginTop: 16,
-                      }}
-                    >
-                      {fileList.length > 0 ? (
-                        "Thêm file khác"
-                      ) : (
-                        <>
-                          Kéo thả hoặc{" "}
-                          <span style={{ color: "#1677ff" }}>
-                            click vào khu vực này
-                          </span>{" "}
-                          để chọn file
-                        </>
-                      )}
-                    </p>
-                    <p
-                      className="ant-upload-hint"
-                      style={{ color: "#64748b", fontSize: 14 }}
-                    >
-                      Hỗ trợ định dạng: .xml.{" "}
-                      <Text strong>Tối đa 10MB/file.</Text>
-                    </p>
-
-                    {fileList.length === 0 && (
-                      <div style={{ marginTop: 32 }}>
-                        <Tag
-                          color="blue"
+                      >
+                        <p className="ant-upload-drag-icon">
+                          <CloudUploadOutlined
+                            style={
+                              fileList.length === 0
+                                ? { fontSize: 64, color: "#1677ff" }
+                                : { fontSize: 48, color: "#1677ff" }
+                            }
+                          />
+                        </p>
+                        <p
+                          className="ant-upload-text"
                           style={{
-                            padding: "6px 16px",
-                            borderRadius: 20,
-                            fontSize: 13,
-                            border: "none",
-                            background: "#e6f4ff",
-                            color: "#1677ff",
+                            fontSize: fileList.length === 0 ? 18 : 16,
+                            fontWeight: 500,
+                            marginBottom: 8,
+                            marginTop: 16,
                           }}
                         >
-                          💡 Khuyến nghị: Ưu tiên sử dụng file XML (QĐ
-                          1550/QĐ-TCT) để bóc tách chính xác 100%.
-                        </Tag>
-                      </div>
-                    )}
-                  </Dragger>
-                </Tabs.TabPane>
+                          {fileList.length > 0 ? (
+                            "Thêm file khác"
+                          ) : (
+                            <>
+                              Kéo thả hoặc{" "}
+                              <span style={{ color: "#1677ff" }}>
+                                click vào khu vực này
+                              </span>{" "}
+                              để chọn file
+                            </>
+                          )}
+                        </p>
+                        <p
+                          className="ant-upload-hint"
+                          style={{ color: "#64748b", fontSize: 14 }}
+                        >
+                          Hỗ trợ định dạng: .xml.{" "}
+                          <Text strong>Tối đa 10MB/file.</Text>
+                        </p>
 
-                <Tabs.TabPane
-                  key="ocr"
-                  tab={
-                    <span>
-                      <FileImageOutlined /> Tải lên PDF / Ảnh (AI Bóc tách)
-                    </span>
-                  }
-                >
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="Lưu ý quan trọng"
-                    description="Dữ liệu bóc tách bằng AI (OCR) có thể có sai sót so với bản gốc. Bắt buộc rà soát kỹ Số tiền, Mã số thuế và Ngày lập sau khi hệ thống xử lý xong."
-                    style={{ marginBottom: 16 }}
-                  />
+                        {fileList.length === 0 && (
+                          <div style={{ marginTop: 32 }}>
+                            <Tag
+                              color="blue"
+                              variant="filled"
+                              style={{
+                                padding: "6px 16px",
+                                borderRadius: 20,
+                                fontSize: 13,
+                                border: "none",
+                                background: "#e6f4ff",
+                                color: "#1677ff",
+                              }}
+                            >
+                              💡 Khuyến nghị: Ưu tiên sử dụng file XML (QĐ
+                              1550/QĐ-TCT) để bóc tách chính xác 100%.
+                            </Tag>
+                          </div>
+                        )}
+                      </Dragger>
+                    ),
+                  },
+                  {
+                    key: "ocr",
+                    label: (
+                      <span>
+                        <FileImageOutlined /> Tải lên PDF / Ảnh (AI Bóc tách)
+                      </span>
+                    ),
+                    children: (
+                      <>
+                        <Alert
+                          type="warning"
+                          showIcon
+                          title="Lưu ý quan trọng"
+                          description="Dữ liệu bóc tách bằng AI (OCR) có thể có sai sót so với bản gốc. Bắt buộc rà soát kỹ Số tiền, Mã số thuế và Ngày lập sau khi hệ thống xử lý xong."
+                          style={{ marginBottom: 16 }}
+                        />
 
-                  <Dragger
-                    {...uploadProps}
-                    style={
-                      fileList.length === 0
-                        ? {
-                            padding: "80px 20px",
-                            borderRadius: 16,
-                            background: "#f8fafc",
-                            border: "2px dashed #cbd5e1",
-                            width: "100%",
-                            maxWidth: 800,
-                            margin: "0 auto",
+                        <Dragger
+                          {...uploadProps}
+                          style={
+                            fileList.length === 0
+                              ? {
+                                  padding: "80px 20px",
+                                  borderRadius: 16,
+                                  background: "#f8fafc",
+                                  border: "2px dashed #cbd5e1",
+                                  width: "100%",
+                                  maxWidth: 800,
+                                  margin: "0 auto",
+                                }
+                              : {
+                                  padding: "60px 10px",
+                                  borderRadius: 8,
+                                  background: "#fafbfc",
+                                  height: "100%",
+                                  borderColor: "#1677ff40",
+                                }
                           }
-                        : {
-                            padding: "60px 10px",
-                            borderRadius: 8,
-                            background: "#fafbfc",
-                            height: "100%",
-                            borderColor: "#1677ff40",
-                          }
-                    }
-                  >
-                    <p className="ant-upload-drag-icon">
-                      <CloudUploadOutlined
-                        style={
-                          fileList.length === 0
-                            ? { fontSize: 64, color: "#1677ff" }
-                            : { fontSize: 48, color: "#1677ff" }
-                        }
-                      />
-                    </p>
-                    <p
-                      className="ant-upload-text"
-                      style={{
-                        fontSize: fileList.length === 0 ? 18 : 16,
-                        fontWeight: 500,
-                        marginBottom: 8,
-                        marginTop: 16,
-                      }}
-                    >
-                      {fileList.length > 0 ? (
-                        "Thêm file khác"
-                      ) : (
-                        <>
-                          Kéo thả hoặc{" "}
-                          <span style={{ color: "#1677ff" }}>
-                            click vào khu vực này
-                          </span>{" "}
-                          để chọn file
-                        </>
-                      )}
-                    </p>
-                    <p
-                      className="ant-upload-hint"
-                      style={{ color: "#64748b", fontSize: 14 }}
-                    >
-                      Hỗ trợ định dạng: .pdf, .jpg, .jpeg, .png.{" "}
-                      <Text strong>Tối đa 10MB/file.</Text>
-                    </p>
-                  </Dragger>
-                </Tabs.TabPane>
-              </Tabs>
+                        >
+                          <p className="ant-upload-drag-icon">
+                            <CloudUploadOutlined
+                              style={
+                                fileList.length === 0
+                                  ? { fontSize: 64, color: "#1677ff" }
+                                  : { fontSize: 48, color: "#1677ff" }
+                              }
+                            />
+                          </p>
+                          <p
+                            className="ant-upload-text"
+                            style={{
+                              fontSize: fileList.length === 0 ? 18 : 16,
+                              fontWeight: 500,
+                              marginBottom: 8,
+                              marginTop: 16,
+                            }}
+                          >
+                            {fileList.length > 0 ? (
+                              "Thêm file khác"
+                            ) : (
+                              <>
+                                Kéo thả hoặc{" "}
+                                <span style={{ color: "#1677ff" }}>
+                                  click vào khu vực này
+                                </span>{" "}
+                                để chọn file
+                              </>
+                            )}
+                          </p>
+                          <p
+                            className="ant-upload-hint"
+                            style={{ color: "#64748b", fontSize: 14 }}
+                          >
+                            Hỗ trợ định dạng: .pdf, .jpg, .jpeg, .png.{" "}
+                            <Text strong>Tối đa 10MB/file.</Text>
+                          </p>
+                        </Dragger>
+                      </>
+                    ),
+                  },
+                ]}
+              />
             </Col>
 
             {fileList.length > 0 && (
@@ -1230,7 +1331,7 @@ const UploadInvoice: React.FC = () => {
                     borderRadius: 8,
                     height: "100%",
                   }}
-                  bodyStyle={{ padding: 0 }}
+                  styles={{ body: { padding: 0 } }}
                 >
                   <div
                     style={{
@@ -1320,7 +1421,7 @@ const UploadInvoice: React.FC = () => {
                               </Text>
                               <Space size="middle" style={{ marginTop: 2 }}>
                                 <Tag
-                                  bordered={false}
+                                  variant="filled"
                                   color={color}
                                   style={{ margin: 0 }}
                                 >
@@ -1478,6 +1579,8 @@ const UploadInvoice: React.FC = () => {
         onCancel={() => setCommentModalVisible(false)}
         okText="Xác nhận gửi duyệt"
         cancelText="Hủy"
+        mask={{ closable: false }}
+        destroyOnHidden
       >
         <Paragraph type="secondary">
           Hóa đơn này có cảnh báo rủi ro (ví dụ: không có MST người mua). Vui
@@ -1514,6 +1617,17 @@ const UploadInvoice: React.FC = () => {
           background-color: #ffe7e6 !important;
         }
       `}</style>
+      {reviewModalVisible && (
+        <OcrReviewModal
+          visible={reviewModalVisible}
+          invoiceId={reviewInvoiceId || ""}
+          onClose={() => setReviewModalVisible(false)}
+          onSaveSuccess={() => {
+            // Optional: Refresh the record in result list if needed
+            // For now, it's enough to let user see it updated in detail
+          }}
+        />
+      )}
     </div>
   );
 };

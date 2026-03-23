@@ -331,6 +331,30 @@ namespace SmartInvoice.API.Controller
             }
         }
 
+        [HttpGet("{id}/visual")]
+        [Authorize(Policy = Constants.Permissions.InvoiceView)]
+        public async Task<IActionResult> GetInvoiceVisual(Guid id)
+        {
+            try
+            {
+                var (_, companyId, _, _) = GetUserInfo();
+                var url = await _invoiceService.GetVisualFileUrlAsync(id, companyId);
+                
+                if (string.IsNullOrEmpty(url))
+                    return NotFound(new { Message = "Không tìm thấy file ảnh/PDF cho hóa đơn này." });
+
+                return Ok(new { Url = url });
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+            }
+        }
+
         // ════════════════════════════════════════════
         //  CRUD
         // ════════════════════════════════════════════

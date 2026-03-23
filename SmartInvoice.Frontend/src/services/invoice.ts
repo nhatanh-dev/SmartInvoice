@@ -96,6 +96,7 @@ export interface ValidationLayerDto {
     validationStatus: string;
     errorCode: string | null;
     errorMessage: string | null;
+    suggestion: string | null;
     errorDetails: string | null; // This is a JSON string of ValidationErrorDetail[]
     layerData: string | null;
     checkedAt: string;
@@ -196,6 +197,7 @@ export interface InvoiceDetailDto {
     validationLayers: ValidationLayerDto[];
     riskChecks: RiskCheckDto[];
     auditLogs: AuditLogDto[];
+    extractedData: InvoiceExtractedData | null;
 }
 
 export interface InvoiceStatsDto {
@@ -204,6 +206,31 @@ export interface InvoiceStatsDto {
   validCount: number;
   needReviewCount: number;
   totalCount: number;
+}
+
+export interface UpdateInvoiceDto {
+    invoiceNumber?: string;
+    serialNumber?: string;
+    formNumber?: string;
+    invoiceDate: string;
+    totalAmount: number;
+    totalAmountBeforeTax?: number | null;
+    totalTaxAmount?: number | null;
+    status?: string;
+    notes?: string;
+
+    // Seller
+    sellerName?: string | null;
+    sellerTaxCode?: string | null;
+    sellerAddress?: string | null;
+
+    // Buyer
+    buyerName?: string | null;
+    buyerTaxCode?: string | null;
+    buyerAddress?: string | null;
+
+    // Items
+    lineItems?: LineItemDto[];
 }
 
 // ════════════════════════════════════════════
@@ -270,8 +297,12 @@ export const invoiceService = {
                 if (detail.status !== 'Processing') {
                     return detail;
                 }
-            } catch {
-                // Retry on network errors
+            } catch (err: any) {
+                // If it's a 404, the invoice was likely deleted by the worker due to fatal errors (e.g duplicate)
+                if (err?.response?.status === 404) {
+                    throw new Error("Hóa đơn đã bị xóa do thông tin không hợp lệ hoặc bị trùng lặp.");
+                }
+                // Otherwise retry on transient network errors
             }
         }
         throw new Error('OCR processing timed out after ' + (maxAttempts * intervalMs / 1000) + 's');
@@ -311,6 +342,15 @@ export const invoiceService = {
     async getInvoiceDetail(id: string): Promise<InvoiceDetailDto> {
         const response = await apiClient.get<InvoiceDetailDto>(`/invoices/${id}`);
         return response.data;
+    },
+
+    async getVisualFileUrl(id: string): Promise<{ url: string }> {
+        const response = await apiClient.get<{ url: string }>(`/invoices/${id}/visual`);
+        return response.data;
+    },
+
+    async updateInvoice(id: string, data: UpdateInvoiceDto): Promise<void> {
+        await apiClient.put(`/invoices/${id}`, data);
     },
 
     // --- Workflow ---

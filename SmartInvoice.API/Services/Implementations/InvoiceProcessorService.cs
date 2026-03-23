@@ -9,7 +9,6 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
-using System.Linq;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using SmartInvoice.API.Entities.JsonModels;
@@ -103,11 +102,6 @@ namespace SmartInvoice.API.Services.Implementations
                 {
                     if (isCashRegister)
                     {
-                        // result.AddWarning(
-                        //     "WARN_SIG_CASH_REG",
-                        //     "Hóa đơn khởi tạo từ máy tính tiền không có chữ ký số (Hợp lệ theo quy định).",
-                        //     "Đối với hóa đơn máy tính tiền, không cần chữ ký số."
-                        // );
                         return result;
                     }
 
@@ -357,13 +351,13 @@ namespace SmartInvoice.API.Services.Implementations
                 // 1. Kiểm tra cấu trúc format
                 ValidateFormatRules(xmlDoc, result, pBan, khmshDon, khhDon, shDon, dvtTe, tGia, tchDon, nLap, ngayKy, mccqt, isCashRegister, sellerTax, totalAmountStr);
 
-                // 2. Kiểm tra chữ ký (Ghi nhận lỗi nhưng KHÔNG return sớm)
+                // 2. Kiểm tra chữ ký
                 ValidateSignerSubjectMismatch(xmlDoc, sellerTax, result);
 
-                // 3. Kiểm tra DB: Quyền sở hữu, Trùng lặp (Ghi nhận lỗi nhưng KHÔNG return sớm)
+                // 3. Kiểm tra DB: Quyền sở hữu, Trùng lặp
                 await ValidateDatabaseConstraintsAsync(companyId, sellerTax, buyerTax, GetVal("NMua/Ten"), khhDon, shDon, result, cancellationToken);
 
-                // 4. LUÔN LUÔN chạy kiểm tra toán học để gom đủ lỗi tiền bạc
+                // 4. LUÔN LUÔN chạy kiểm tra toán học
                 await ValidateFinancialMath(xmlDoc, result, isVatInvoice, totalAmountStr, GetVal("TgTCThue") ?? "0", GetVal("TgTThue") ?? "0");
 
                 if (!string.IsNullOrEmpty(sellerTax))
@@ -374,8 +368,6 @@ namespace SmartInvoice.API.Services.Implementations
                     }
                     else
                     {
-                        // Note: VietQR validation is now performed asynchronously via SQS
-                        // The invoice will be updated with validation results by the background worker
                         _logger.LogInformation("VietQR validation will be performed asynchronously for TaxCode={TaxCode}", sellerTax);
                     }
                 }
@@ -449,7 +441,7 @@ namespace SmartInvoice.API.Services.Implementations
                 if (tthdLQuanNodes == null || tthdLQuanNodes.Count == 0)
                 {
                     string tchDonName = tchDon == "1" ? "Thay thế" : "Điều chỉnh";
-                    result.AddError(ErrorCodes.LogicRecordType, $"Hóa đơn mang tính chất '{tchDonName}' bắt buộc phải chứa thông tin hóa đơn bị thay đổi/điều chỉnh.", "Bạn cần cung cấp thông tin liên kết với hóa đơn gốc.");
+                    result.AddError(ErrorCodes.LogicRecordType, $"Hóa đơn mang tính chất '{tchDonName}' bắt buộc phải chứa thông tin hóa đơn bị thay đổi/điều chỉnh.", "Bạn cần cung cấp thông tin liên kết with hóa đơn gốc.");
                     isDataValid = false;
                 }
             }
@@ -516,7 +508,6 @@ namespace SmartInvoice.API.Services.Implementations
                     if (!string.Equals(buyerTax.Trim(), company.TaxCode?.Trim(), StringComparison.OrdinalIgnoreCase))
                     {
                         result.AddError(ErrorCodes.LogicOwner, $"Mã số thuế người mua ({buyerTax}) không khớp với công ty của bạn.", "Vui lòng kiểm tra lại để đảm bảo hóa đơn này xuất đúng tên công ty bạn.");
-                        return false;
                     }
 
                     if (!string.IsNullOrWhiteSpace(buyerName) && !string.IsNullOrWhiteSpace(company.CompanyName))
@@ -524,7 +515,7 @@ namespace SmartInvoice.API.Services.Implementations
                         double similarity = CalculateSimilarity(buyerName.ToLower(), company.CompanyName.ToLower());
                         if (similarity < 0.6)
                         {
-                            result.AddWarning($"Tên người mua trên hóa đơn (\"{buyerName}\") không khớp hoàn toàn với tên công ty của bạn (\"{company.CompanyName}\").");
+                            result.AddWarning($"Tên người mua trên hóa đơn (\"{buyerName}\") không khớp hoàn toàn with tên công ty của bạn (\"{company.CompanyName}\").");
                         }
                     }
                 }
@@ -540,42 +531,39 @@ namespace SmartInvoice.API.Services.Implementations
 
                 if (existingInvoice != null)
                 {
-                    // --- INVOICE DOSSIER MERGE LOGIC ---
-                    // Case 3A: Uploading XML, existing record was from OCR (has VisualFileId but no OriginalFileId)
+                    bool isMerge = false;
                     if (processingMethod == "XML" && existingInvoice.OriginalFileId == null && existingInvoice.ProcessingMethod == "API")
                     {
                         result.MergeMode = DTOs.Invoice.DossierMergeMode.XmlOverridesOcr;
                         result.MergeTargetInvoiceId = existingInvoice.InvoiceId;
-                        // Not a fatal error — allow the upload to proceed with merge
-                        return true;
+                        isMerge = true;
                     }
-
-                    // Case 3B: Uploading OCR, existing record was from XML (has OriginalFileId)
-                    if (processingMethod == "API" && existingInvoice.OriginalFileId != null)
+                    else if (processingMethod == "API" && existingInvoice.OriginalFileId != null)
                     {
                         result.MergeMode = DTOs.Invoice.DossierMergeMode.OcrAttachesToXml;
                         result.MergeTargetInvoiceId = existingInvoice.InvoiceId;
-                        // Not a fatal error — allow the upload to proceed (will only attach visual file)
-                        return true;
+                        isMerge = true;
                     }
 
-                    // --- ORIGINAL DUPLICATE LOGIC (true duplicate) ---
-                    if (existingInvoice.Status == nameof(InvoiceStatus.Rejected))
+                    if (!isMerge)
                     {
-                        if (existingInvoice.Workflow != null && existingInvoice.Workflow.RejectedBy.HasValue)
+                        if (existingInvoice.Status == nameof(InvoiceStatus.Rejected))
                         {
-                            result.AddError(ErrorCodes.LogicDuplicateRejected, $"Hóa đơn số {shDon} này đã bị từ chối trước đó nên không thể tải lên lại.", "Vui lòng liên hệ nhà cung cấp phát hành hóa đơn mới hoặc hóa đơn điều chỉnh.");
-                            return false;
+                            if (existingInvoice.Workflow != null && existingInvoice.Workflow.RejectedBy.HasValue)
+                            {
+                                result.AddError(ErrorCodes.LogicDuplicateRejected, $"Hóa đơn số {shDon} này đã bị từ chối trước đó nên không thể tải lên lại.", "Vui lòng liên hệ nhà cung cấp phát hành hóa đơn mới hoặc hóa đơn điều chỉnh.");
+                            }
+                            else
+                            {
+                                result.IsReplacement = true;
+                                result.ReplacedInvoiceId = existingInvoice.InvoiceId;
+                                result.NewVersion = existingInvoice.Version + 1;
+                            }
                         }
-
-                        result.IsReplacement = true;
-                        result.ReplacedInvoiceId = existingInvoice.InvoiceId;
-                        result.NewVersion = existingInvoice.Version + 1;
-                    }
-                    else
-                    {
-                        result.AddError(ErrorCodes.LogicDuplicate, $"Hóa đơn số {shDon} (Ký hiệu: {khhDon}) đã tồn tại trong hệ thống.", "Bạn không cần tải lên lại hóa đơn này.");
-                        return false;
+                        else
+                        {
+                            result.AddError(ErrorCodes.LogicDuplicate, $"Hóa đơn số {shDon} (Ký hiệu: {khhDon}) đã tồn tại trong hệ thống.", "Bạn không cần tải lên lại hóa đơn này.");
+                        }
                     }
                 }
             }
@@ -589,12 +577,10 @@ namespace SmartInvoice.API.Services.Implementations
                 }
             }
 
-            return true;
+            var fatalErrorCodes = new[] { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected, ErrorCodes.LogicOwner };
+            return !result.ErrorDetails.Any(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode));
         }
 
-        /// <summary>
-        /// Kiểm tra logic toán học tổng tiền, áp dụng cho cả XML và OCR
-        /// </summary>
         private void ValidateFinancialLogic(
             ValidationResultDto result,
             decimal totalAmount,
@@ -606,7 +592,6 @@ namespace SmartInvoice.API.Services.Implementations
             bool isVatInvoice = false,
             string source = "XML")
         {
-            // Kiểm tra: Tổng tiền = Tiền hàng + Thuế
             bool shouldCheckTotalMath = isVatInvoice || totalPreTax > 0 || totalTax > 0;
             if (shouldCheckTotalMath && totalAmount > 0 && Math.Abs((totalPreTax + totalTax) - totalAmount) > tolerance)
             {
@@ -616,7 +601,6 @@ namespace SmartInvoice.API.Services.Implementations
                     $"Chênh lệch quá dung sai cho phép ({tolerance} VNĐ), vui lòng kiểm tra lại.");
             }
 
-            // Nếu có chi tiết dòng hàng, kiểm tra sự khớp của tổng tiền hàng
             if (totalLineItemsPreTax.HasValue)
             {
                 decimal linePreTax = totalLineItemsPreTax.Value;
@@ -644,7 +628,6 @@ namespace SmartInvoice.API.Services.Implementations
                 }
             }
 
-            // Nếu có chi tiết thuế từng dòng, kiểm tra sự khớp (chỉ Warning)
             if (totalLineItemsTax.HasValue && totalTax > 0)
             {
                 decimal lineTax = totalLineItemsTax.Value;
@@ -652,7 +635,6 @@ namespace SmartInvoice.API.Services.Implementations
                 {
                     result.AddWarning(
                         source == "OCR" ? "WARN_LOGIC_TAX_MISMATCH_OCR" : "WARN_LOGIC_TAX_MISMATCH",
-                        // ĐÃ XÓA {sourceLabel} Ở ĐÂY
                         $"Tiền thuế ở chi tiết ({lineTax:N0} đ) không khớp tổng tiền thuế hóa đơn ({totalTax:N0} đ)",
                         "Kiểm tra sự lệch lạc của thuế GTGT từng mặt hàng.");
                 }
@@ -676,7 +658,7 @@ namespace SmartInvoice.API.Services.Implementations
 
             foreach (XmlNode item in items)
             {
-                string name = item.SelectSingleNode(".//*[local-name()='Ten']")?.InnerText ?? "Hàng hóa";
+                string name = item.SelectSingleNode(".//*[local-name()='Ten']")?.InnerText ?? item.SelectSingleNode(".//*[local-name()='THHDVu']")?.InnerText ?? "Hàng hóa";
                 string sQty = item.SelectSingleNode(".//*[local-name()='SLuong']")?.InnerText ?? "0";
                 string sPrice = item.SelectSingleNode(".//*[local-name()='DGia']")?.InnerText ?? "0";
                 string sTotal = item.SelectSingleNode(".//*[local-name()='ThTien']")?.InnerText ?? "0";
@@ -717,7 +699,6 @@ namespace SmartInvoice.API.Services.Implementations
             CheckDecimal(sTotalPreTax, "TgTCThue", out totalPreTax, result);
             CheckDecimal(sTotalTax, "TgTThue", out totalTax, result);
 
-            // Gọi hàm kiểm tra logic chung
             ValidateFinancialLogic(result, totalAmount, totalPreTax, totalTax, tolerance, totalLineItems, totalLineItemsTax, isVatInvoice, "XML");
         }
 
@@ -892,10 +873,6 @@ namespace SmartInvoice.API.Services.Implementations
                 extractedData.SellerName = ocrData.Seller.Name?.Value;
                 extractedData.SellerPhone = ocrData.Seller.Phone?.Value;
                 extractedData.SellerTaxCode = ocrData.Seller.TaxCode?.Value;
-                if (string.IsNullOrEmpty(extractedData.SellerTaxCode) && !string.IsNullOrEmpty(ocrData.Seller.TaxAuthorityCode?.Value))
-                {
-                    // Fallback check if tax authority code might hold something useful
-                }
             }
 
             if (ocrData.Buyer != null)
@@ -912,11 +889,26 @@ namespace SmartInvoice.API.Services.Implementations
             if (ocrData.Items != null && ocrData.Items.Count > 0)
             {
                 int stt = 1;
+                decimal itemSum = 0;
                 foreach (var item in ocrData.Items)
                 {
                     int vatRate = 0;
-                    if (!string.IsNullOrWhiteSpace(item.VatRate?.Value) && item.VatRate.Value.Contains("%"))
-                        int.TryParse(item.VatRate.Value.Replace("%", ""), out vatRate);
+                    if (!string.IsNullOrWhiteSpace(item.VatRate?.Value))
+                    {
+                        var rateVal = item.VatRate.Value.Replace("%", "").Trim();
+                        int.TryParse(rateVal, out vatRate);
+                    }
+
+                    itemSum += item.Total?.Value ?? 0;
+
+                    decimal lineTotal = item.Total?.Value ?? 0;
+                    decimal lineTax = item.LineTax?.Value ?? 0;
+
+                    // Nếu AI trả về 0 nhưng có % thuế, ta tự làm toán nội suy
+                    if (lineTax == 0 && lineTotal > 0 && vatRate > 0)
+                    {
+                        lineTax = Math.Round(lineTotal * vatRate / 100m, 0);
+                    }
 
                     extractedData.LineItems.Add(new SmartInvoice.API.Entities.JsonModels.InvoiceLineItem
                     {
@@ -927,9 +919,47 @@ namespace SmartInvoice.API.Services.Implementations
                         UnitPrice = item.UnitPrice?.Value ?? 0,
                         TotalAmount = item.Total?.Value ?? 0,
                         VatRate = vatRate,
-                        VatAmount = item.LineTax?.Value ?? 0
+                        VatAmount = lineTax
                     });
                 }
+
+                // Smart inference: if subtotal is 0 or inconsistent with item sum, trust item sum
+                if (extractedData.TotalPreTax == 0 || Math.Abs(extractedData.TotalPreTax - itemSum) > 10)
+                {
+                    extractedData.TotalPreTax = itemSum;
+                }
+            }
+
+            // Recalculate VAT from breakdown if missing
+            if (ocrData.Invoice?.VatBreakdown != null && ocrData.Invoice.VatBreakdown.Count > 0)
+            {
+                decimal calculatedTax = 0;
+                foreach (var b in ocrData.Invoice.VatBreakdown)
+                {
+                    decimal taxable = b.TaxableAmount?.Value ?? 0;
+                    decimal vat = b.VatAmount?.Value ?? 0;
+
+                    if (vat == 0 && taxable > 0 && !string.IsNullOrEmpty(b.Rate))
+                    {
+                        var rateMatch = Regex.Match(b.Rate, @"\d+");
+                        if (rateMatch.Success && decimal.TryParse(rateMatch.Value, out decimal rateNum))
+                        {
+                            vat = Math.Round(taxable * rateNum / 100, 0);
+                        }
+                    }
+                    calculatedTax += vat;
+                }
+
+                if (extractedData.TotalTaxAmount == 0 && calculatedTax > 0)
+                {
+                    extractedData.TotalTaxAmount = calculatedTax;
+                }
+            }
+
+            // Ensure consistent TotalAmount
+            if (extractedData.TotalAmount == 0 || Math.Abs(extractedData.TotalAmount - (extractedData.TotalPreTax + extractedData.TotalTaxAmount)) > 10)
+            {
+                extractedData.TotalAmount = extractedData.TotalPreTax + extractedData.TotalTaxAmount;
             }
 
             return extractedData;
@@ -955,7 +985,26 @@ namespace SmartInvoice.API.Services.Implementations
                 string? khhDon = ocrData.Invoice?.Symbol?.Value;
                 string? shDon = ocrData.Invoice?.Number?.Value;
 
-                // Task 1: Use logic-based error code instead of XmlMissingField
+                // Add errors/warnings from Python validator (OCR side)
+                if (ocrData.Validation != null)
+                {
+                    if (ocrData.Validation.Errors != null)
+                    {
+                        foreach (var pyErr in ocrData.Validation.Errors)
+                        {
+                            // Use a generic code if Python doesn't provide one
+                            result.AddError("ERR_OCR_INTERNAL_VALIDATION", pyErr, "Vui lòng kiểm tra lại thực tế trên hóa đơn.");
+                        }
+                    }
+                    if (ocrData.Validation.Warnings != null)
+                    {
+                        foreach (var pyWarn in ocrData.Validation.Warnings)
+                        {
+                            result.AddWarning(pyWarn);
+                        }
+                    }
+                }
+
                 if (string.IsNullOrWhiteSpace(sellerTax))
                     result.AddError("ERR_LOGIC_MISSING_FIELD", "Thiếu thông tin bắt buộc: Mã số thuế người bán", "Hệ thống không tự động nhận diện được MST người bán.");
 
@@ -965,34 +1014,45 @@ namespace SmartInvoice.API.Services.Implementations
                 if (string.IsNullOrWhiteSpace(ocrData.Invoice?.Date?.Value))
                     result.AddError("ERR_LOGIC_MISSING_FIELD", "Thiếu thông tin bắt buộc: Ngày lập", "Hệ thống chưa xác định được ngày lập hóa đơn.");
 
-                bool dbValid = await ValidateDatabaseConstraintsAsync(companyId, sellerTax ?? "", buyerTax ?? "", ocrData.Buyer?.Name?.Value, khhDon ?? "", shDon ?? "", result, cancellationToken, processingMethod: "API");
-                if (!dbValid) return result;
+                await ValidateDatabaseConstraintsAsync(companyId, sellerTax ?? "", buyerTax ?? "", ocrData.Buyer?.Name?.Value, khhDon ?? "", shDon ?? "", result, cancellationToken, processingMethod: "API");
 
-                decimal totalAmount = ocrData.Invoice?.TotalAmount?.Value ?? 0;
-                decimal totalPreTax = ocrData.Invoice?.Subtotal?.Value ?? 0;
-                decimal totalTax = ocrData.Invoice?.VatAmount?.Value ?? 0;
+                var extractedData = ExtractOcrData(ocrData);
+
+                decimal totalAmount = extractedData.TotalAmount;
+                decimal totalPreTax = extractedData.TotalPreTax;
+                decimal totalTax = extractedData.TotalTaxAmount;
 
                 decimal? totalLineItemsPreTax = null;
                 decimal? totalLineItemsTax = null;
 
-                if (ocrData.Items != null && ocrData.Items.Any())
+                // 1. TÍNH TỔNG TIỀN TỪ DỮ LIỆU ĐÃ ĐƯỢC LÀM SẠCH VÀ NỘI SUY (tránh lỗi 0đ)
+                if (extractedData.LineItems != null && extractedData.LineItems.Any())
                 {
                     totalLineItemsPreTax = 0;
                     totalLineItemsTax = 0;
 
-                    // Task 2: Add line-item level validation
+                    foreach (var item in extractedData.LineItems)
+                    {
+                        totalLineItemsPreTax += item.TotalAmount;
+                        totalLineItemsTax += item.VatAmount; // Đã chứa số tiền thuế được tự động tính ở hàm Extract
+                    }
+                }
+
+                // 2. DUYỆT DỮ LIỆU RAW ĐỂ GIỮ LẠI CÁC CẢNH BÁO ĐỊNH DẠNG/TOÁN HỌC
+                if (ocrData.Items != null && ocrData.Items.Any())
+                {
                     foreach (var item in ocrData.Items)
                     {
-                        // Accumulate totals for aggregate validation
-                        totalLineItemsPreTax += item.Total?.Value ?? 0;
-                        totalLineItemsTax += item.LineTax?.Value ?? 0;
-
-                        // 2.1: Tax Rate Validation
                         string? vatRateStr = item.VatRate?.Value;
                         if (!string.IsNullOrWhiteSpace(vatRateStr))
                         {
-                            // Extract and normalize VAT rate (e.g., "10%" -> "10%")
                             string normalizedRate = vatRateStr.Trim();
+                            // If it's a number (e.g. "8"), append "%" to match ValidTaxRates (e.g. "8%")
+                            if (Regex.IsMatch(normalizedRate, @"^\d+$"))
+                            {
+                                normalizedRate += "%";
+                            }
+
                             if (!ValidTaxRates.Contains(normalizedRate))
                             {
                                 string productName = item.Name?.Value ?? "Hàng hóa";
@@ -1003,12 +1063,10 @@ namespace SmartInvoice.API.Services.Implementations
                             }
                         }
 
-                        // 2.2: Line Math Deviation Check
                         decimal qty = item.Quantity?.Value ?? 0;
                         decimal price = item.UnitPrice?.Value ?? 0;
                         decimal total = item.Total?.Value ?? 0;
 
-                        // Check if qty * price matches total (with tolerance)
                         if (qty > 0 && price > 0 && total > 0)
                         {
                             decimal expectedTotal = qty * price;
@@ -1024,9 +1082,7 @@ namespace SmartInvoice.API.Services.Implementations
                     }
                 }
 
-                // Xác định loại hóa đơn từ dữ liệu OCR: 
-                // Nếu Ký hiệu bắt đầu bằng '2' (ví dụ: 2C22TAA) hoặc Tên loại có chữ "BÁN HÀNG" -> Không phải hóa đơn GTGT
-                bool isOcrVatInvoice = true; // Mặc định giả định là hóa đơn GTGT (kiểm tra chặt chẽ nhất)
+                bool isOcrVatInvoice = true;
                 string? invoiceTypeStr = ocrData.Invoice?.Type?.Value?.ToUpper();
                 string? invoiceSymbol = ocrData.Invoice?.Symbol?.Value;
 
@@ -1036,7 +1092,6 @@ namespace SmartInvoice.API.Services.Implementations
                     isOcrVatInvoice = false;
                 }
 
-                // Gọi hàm kiểm tra logic chung cho cả XML và OCR với cờ isOcrVatInvoice đã được xác định động
                 ValidateFinancialLogic(result, totalAmount, totalPreTax, totalTax, tolerance, totalLineItemsPreTax, totalLineItemsTax, isVatInvoice: isOcrVatInvoice, "OCR");
 
                 if (!string.IsNullOrEmpty(sellerTax))
@@ -1047,8 +1102,6 @@ namespace SmartInvoice.API.Services.Implementations
                     }
                     else
                     {
-                        // Note: VietQR validation is now performed asynchronously via SQS
-                        // The invoice will be updated with validation results by the background worker
                         _logger.LogInformation("VietQR validation will be performed asynchronously for TaxCode={TaxCode}", sellerTax);
                     }
                 }

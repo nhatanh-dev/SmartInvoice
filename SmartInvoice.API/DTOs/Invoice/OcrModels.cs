@@ -82,6 +82,9 @@ public class OcrInvoiceData
 
     [JsonPropertyName("vat_rate")]
     public OcrField<string>? VatRate { get; set; }
+
+    [JsonPropertyName("vat_breakdown")]
+    public List<OcrVatBreakdownEntry>? VatBreakdown { get; set; }
 }
 
 public class OcrItem
@@ -133,6 +136,21 @@ public class OcrInvoiceResult
 
     [JsonPropertyName("status")]
     public string? Status { get; set; }
+
+    [JsonPropertyName("_validation")]
+    public OcrValidation? Validation { get; set; }
+}
+
+public class OcrValidation
+{
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("errors")]
+    public List<string>? Errors { get; set; }
+
+    [JsonPropertyName("warnings")]
+    public List<string>? Warnings { get; set; }
 }
 
 public class ProcessOcrRequestDto
@@ -145,4 +163,16 @@ public class ProcessOcrRequestDto
 
     [JsonPropertyName("ocrResult")]
     public OcrInvoiceResult? OcrResult { get; set; }
+}
+
+public class OcrVatBreakdownEntry
+{
+    [JsonPropertyName("rate")]
+    public string? Rate { get; set; }
+
+    [JsonPropertyName("taxable_amount")]
+    public OcrField<decimal?>? TaxableAmount { get; set; }
+
+    [JsonPropertyName("vat_amount")]
+    public OcrField<decimal?>? VatAmount { get; set; }
 }

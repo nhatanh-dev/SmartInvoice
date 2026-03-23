@@ -63,7 +63,7 @@ const MisaConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
       confirmLoading={updateMutation.isPending}
       okText="Lưu cấu hình"
       cancelText="Hủy"
-      destroyOnClose
+      destroyOnHidden
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
         Thiết lập tài khoản mặc định sẽ được điền tự động khi xuất file chuẩn MISA AMIS Accounting.
@@ -241,7 +241,7 @@ const ReportsPage: React.FC = () => {
           { title: 'Cần xem xét', value: needReviewCount.toString(), color: '#e6a817' },
         ].map((stat, i) => (
           <Col xs={12} lg={6} key={i}>
-            <Card loading={isLoading} bordered={false} style={{ borderRadius: 12, borderLeft: `3px solid ${stat.color}` }}>
+            <Card loading={isLoading} variant="borderless" style={{ borderRadius: 12, borderLeft: `3px solid ${stat.color}` }}>
               <Text type="secondary" style={{ fontSize: 12 }}>{stat.title}</Text>
               <div style={{ fontSize: 22, fontWeight: 700, color: stat.color, marginTop: 4 }}>
                 {stat.value}
@@ -254,9 +254,9 @@ const ReportsPage: React.FC = () => {
       {/* ── Export Actions ── */}
       <Row gutter={16}>
         <Col xs={24} lg={12}>
-          <Card bordered={false} style={{ borderRadius: 12 }} title="Xuất báo cáo nhanh">
-            <Spin spinning={isExporting} tip="Đang xử lý...">
-              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Card variant="borderless" style={{ borderRadius: 12 }} title="Xuất báo cáo nhanh">
+            <Spin spinning={isExporting} description="Đang xử lý...">
+              <Space orientation="vertical" style={{ width: '100%' }} size={12}>
                 {/* MISA Export */}
                 <div style={{
                   padding: '14px 16px', borderRadius: 10, border: '1px solid #f0f0f0',
@@ -307,7 +307,7 @@ const ReportsPage: React.FC = () => {
 
         {/* ── Export History (placeholder — có thể kết nối API sau) ── */}
         <Col xs={24} lg={12}>
-          <Card bordered={false} style={{ borderRadius: 12 }} title="Lịch sử xuất file">
+          <Card variant="borderless" style={{ borderRadius: 12 }} title="Lịch sử xuất file">
             <Table
               size="small"
               pagination={{ 

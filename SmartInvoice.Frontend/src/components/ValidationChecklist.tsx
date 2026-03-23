@@ -236,7 +236,7 @@ const ValidationChecklist: React.FC<ValidationChecklistProps> = ({ result }) => 
               </Text>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
                 {passedChecks.map((check) => (
-                  <Tag key={check.errorCode} bordered={false} color="success" style={{ margin: 0 }}>
+                  <Tag key={check.errorCode} variant="filled" color="success" style={{ margin: 0 }}>
                     {check.name}
                   </Tag>
                 ))}

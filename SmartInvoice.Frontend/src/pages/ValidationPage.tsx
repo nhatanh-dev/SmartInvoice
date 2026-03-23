@@ -202,8 +202,8 @@ const ValidationPage: React.FC = () => {
           <Row gutter={16} style={{ marginBottom: 24 }}>
             {stats.map((layer, i) => (
               <Col xs={24} md={8} key={i}>
-                <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash"
-                  style={{ borderTop: `3px solid ${layer.color}` }} bodyStyle={{ padding: 20 }}>
+                <Card variant="borderless" className="bg-dash-card rounded-[14px] shadow-dash"
+                  style={{ borderTop: `3px solid ${layer.color}` }} styles={{ body: { padding: 20 } }}>
                   <Space align="start">
                     <div style={{
                       width: 40, height: 40, borderRadius: 10,
@@ -235,7 +235,7 @@ const ValidationPage: React.FC = () => {
               { label: 'Không đạt', count: data.redCount, color: '#d63031', pct: data.totalValidated ? Math.round(data.redCount * 100 / data.totalValidated) : 0 },
             ].map((item, i) => (
               <Col xs={24} sm={8} key={i}>
-                <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash" bodyStyle={{ padding: 16, textAlign: 'center' }}>
+                <Card variant="borderless" className="bg-dash-card rounded-[14px] shadow-dash" styles={{ body: { padding: 16, textAlign: 'center' } }}>
                   <div style={{
                     width: 48, height: 48, borderRadius: '50%',
                     background: `${item.color}14`, display: 'inline-flex',
@@ -254,7 +254,7 @@ const ValidationPage: React.FC = () => {
           </Row>
 
           {/* ── Results Table ──────────────────────────────── */}
-          <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash" bodyStyle={{ padding: 0 }}>
+          <Card variant="borderless" className="bg-dash-card rounded-[14px] shadow-dash" styles={{ body: { padding: 0 } }}>
             {/* Search & Filters */}
             <div style={{ padding: '16px 24px', borderBottom: '1px solid #E2E8F0' }}>
               <Row gutter={12} align="middle">

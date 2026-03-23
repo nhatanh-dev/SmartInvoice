@@ -1,27 +1,22 @@
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM python:3.10-slim
 
 # Prevent interactive prompts during apt-get
 ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# Install Python 3.10, pip, and system dependencies (OpenCV, pdf2image)
+# Install system dependencies (OpenCV, pdf2image)
 RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3.10-dev \
-    python3-pip \
     libgl1 \
     libglib2.0-0 \
     poppler-utils \
-    && ln -sf /usr/bin/python3.10 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA 11.8
-RUN pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
+# Install PyTorch (CPU version)
+RUN pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cpu
 
-# Install PaddlePaddle GPU (CUDA 11.8 compatible)
-RUN pip install --no-cache-dir paddlepaddle-gpu==2.6.1
+# Install PaddlePaddle (CPU version)
+RUN pip install --no-cache-dir paddlepaddle==2.6.2
 
 # Install other requirements
 COPY requirements-docker.txt .
@@ -36,11 +31,12 @@ EXPOSE 5000
 # Set environment variables
 ENV HOST=0.0.0.0
 ENV PORT=5000
-ENV DEVICE=cuda
+ENV DEVICE=cpu
 ENV PYTHONUNBUFFERED=1
 
 # Change directory to the web_app folder where app.py lives
 WORKDIR /app/inference/web_app
 
-# Run the Flask app
-CMD ["python", "app.py"]
+# Run the app with Gunicorn (production WSGI server)
+# Use threads instead of multiple workers to save RAM on Fargate
+CMD ["gunicorn", "--workers", "1", "--threads", "4", "--timeout", "300", "--bind", "0.0.0.0:5000", "app:app"]
