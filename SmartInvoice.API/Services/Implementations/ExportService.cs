@@ -407,6 +407,28 @@ public class ExportService : IExportService
             var inv = invoices[i];
             var row = i + 2;
 
+            // Tính toán dự phòng cho hóa đơn mẫu 2 (không có tiền trước thuế)
+            decimal computedTotalBeforeTax = inv.TotalAmountBeforeTax ?? 0;
+            if (computedTotalBeforeTax == 0)
+            {
+                var lineItems = inv.ExtractedData?.LineItems;
+                if (lineItems != null && lineItems.Any())
+                {
+                    computedTotalBeforeTax = lineItems.Sum(x => x.TotalAmount > 0 ? x.TotalAmount : x.Quantity * x.UnitPrice);
+                }
+                
+                if (computedTotalBeforeTax == 0)
+                {
+                    computedTotalBeforeTax = inv.TotalAmount;
+                }
+            }
+
+            decimal computedTotalTax = inv.TotalTaxAmount ?? 0;
+            if (computedTotalTax == 0 && inv.TotalAmount >= computedTotalBeforeTax)
+            {
+                computedTotalTax = inv.TotalAmount - computedTotalBeforeTax;
+            }
+
             ws.Cell(row, 1).Value = i + 1;
             ws.Cell(row, 2).Value = inv.InvoiceNumber;
             ws.Cell(row, 3).Value = inv.SerialNumber;
@@ -414,9 +436,9 @@ public class ExportService : IExportService
             ws.Cell(row, 4).Style.DateFormat.Format = "dd/MM/yyyy";
             ws.Cell(row, 5).Value = inv.Seller.Name;
             ws.Cell(row, 6).Value = inv.Seller.TaxCode;
-            ws.Cell(row, 7).Value = inv.TotalAmountBeforeTax ?? 0;
+            ws.Cell(row, 7).Value = computedTotalBeforeTax;
             ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0";
-            ws.Cell(row, 8).Value = inv.TotalTaxAmount ?? 0;
+            ws.Cell(row, 8).Value = computedTotalTax;
             ws.Cell(row, 8).Style.NumberFormat.Format = "#,##0";
             ws.Cell(row, 9).Value = inv.TotalAmount;
             ws.Cell(row, 9).Style.NumberFormat.Format = "#,##0";

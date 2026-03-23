@@ -536,7 +536,11 @@ const InvoiceList: React.FC = () => {
                   value={dateFrom && dateTo ? [dayjs(dateFrom), dayjs(dateTo)] : undefined}
                   onChange={dates => {
                     if (dates && dates[0] && dates[1]) {
-                      updateParams({ dateFrom: dates[0].toISOString(), dateTo: dates[1].toISOString(), page: '1' });
+                      updateParams({ 
+                        dateFrom: dates[0].startOf('day').toISOString(), 
+                        dateTo: dates[1].endOf('day').toISOString(), 
+                        page: '1' 
+                      });
                     } else {
                       updateParams({ dateFrom: undefined, dateTo: undefined, page: '1' });
                     }

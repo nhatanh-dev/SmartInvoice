@@ -155,9 +155,19 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
     }).format(value);
   };
 
-  const totalPreTax = extracted.totalPreTax ?? extracted.total_pre_tax;
-  const totalTaxAmount = extracted.totalTaxAmount ?? extracted.total_tax_amount;
+  // ─── Computed values (fallback for Mẫu 2 invoices without explicit totals) ───
+  const getLineItemTotal = (item: any) =>
+    item.totalAmount || item.total_amount || ((item.quantity || 0) * (item.unitPrice || item.unit_price || 0)) || 0;
+
+  const lineItems = extracted.lineItems || extracted.line_items || [];
+  
   const totalAmount = extracted.totalAmount ?? extracted.total_amount;
+
+  const totalPreTax = extracted.totalPreTax ?? extracted.total_pre_tax ?? 
+    (lineItems.length > 0 ? lineItems.reduce((sum: number, item: any) => sum + getLineItemTotal(item), 0) : totalAmount);
+
+  const totalTaxAmount = extracted.totalTaxAmount ?? extracted.total_tax_amount ?? 
+    (totalAmount ? totalAmount - (totalPreTax || 0) : 0);
 
   return (
     <Card bordered={false} style={{ background: "#fafafa", margin: "16px 0" }}>
@@ -249,7 +259,7 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
                             display: "block",
                           }}
                         >
-                          - {c.detail.errorMessage}
+                          {c.detail.errorMessage}
                         </Text>
                         {c.detail.suggestion && (
                           <Text
@@ -261,7 +271,7 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
                               marginTop: 4,
                             }}
                           >
-                            💡 Gợi ý: {c.detail.suggestion}
+                            Gợi ý: {c.detail.suggestion}
                           </Text>
                         )}
                       </div>

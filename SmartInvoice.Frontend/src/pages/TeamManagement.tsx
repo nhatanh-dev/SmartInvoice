@@ -23,6 +23,11 @@ const AVAILABLE_PERMISSIONS = [
 const TeamManagement: React.FC = () => {
     const [data, setData] = useState<CompanyMemberDto[]>([]);
     const [loading, setLoading] = useState(false);
+    
+    // Search and Filter State
+    const [searchText, setSearchText] = useState('');
+    const [inputSearch, setInputSearch] = useState(''); // Thêm state trung gian để giữ giá trị ô input
+    const [statusFilter, setStatusFilter] = useState('all'); // all, active, inactive, deleted
 
     // Manage Permissions Drawer
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -167,7 +172,11 @@ const TeamManagement: React.FC = () => {
             title: 'Trạng thái',
             dataIndex: 'isActive',
             key: 'isActive',
-            render: (isActive: boolean, record: CompanyMemberDto) => (
+            render: (isActive: boolean, record: CompanyMemberDto) => {
+                if (record.isDeleted) {
+                    return <Tag color="error">Đã bị xóa</Tag>;
+                }
+                return (
                 <Popconfirm
                     title={isActive ? "Ngừng hoạt động nhân viên này?" : "Mở khóa nhân viên này?"}
                     description={isActive 
@@ -187,7 +196,7 @@ const TeamManagement: React.FC = () => {
                         style={!isActive ? { backgroundColor: '#ff4d4f' } : {}}
                     />
                 </Popconfirm>
-            ),
+            )},
         },
         {
             title: 'Hành động',
@@ -199,7 +208,7 @@ const TeamManagement: React.FC = () => {
                         icon={<KeyOutlined />}
                         size="small"
                         onClick={() => handleManagePerms(record)}
-                        disabled={record.role === 'CompanyAdmin'}
+                        disabled={record.role === 'CompanyAdmin' || record.isDeleted}
                     >
                         Phân quyền
                     </Button>
@@ -210,15 +219,29 @@ const TeamManagement: React.FC = () => {
                         okText="Xóa vĩnh viễn"
                         cancelText="Hủy"
                         okButtonProps={{ danger: true }}
-                        disabled={record.role === 'CompanyAdmin'}
+                        disabled={record.role === 'CompanyAdmin' || record.isDeleted}
                     >
                         {/* Nút Xóa giờ chỉ mang tính chất dọn dẹp data rác */}
-                        <Button type="text" danger icon={<DeleteOutlined />} size="small" disabled={record.role === 'CompanyAdmin'} />
+                        <Button type="text" danger icon={<DeleteOutlined />} size="small" disabled={record.role === 'CompanyAdmin' || record.isDeleted} />
                     </Popconfirm>
                 </Space>
             ),
         },
     ];
+
+    const filteredData = data.filter(user => {
+        const matchText = user.fullName.toLowerCase().includes(searchText.toLowerCase()) || 
+                          user.email.toLowerCase().includes(searchText.toLowerCase()) || 
+                          (user.employeeId && user.employeeId.toLowerCase().includes(searchText.toLowerCase()));
+        
+        let matchStatus = true;
+        if (statusFilter === 'active') matchStatus = user.isActive && !user.isDeleted;
+        else if (statusFilter === 'inactive') matchStatus = !user.isActive && !user.isDeleted;
+        else if (statusFilter === 'deleted') matchStatus = user.isDeleted;
+        else if (statusFilter === 'all') matchStatus = !user.isDeleted; // Mặc định ẩn bị xóa
+
+        return matchText && matchStatus;
+    });
 
     return (
         <div className="animate-fade-in-up">
@@ -233,12 +256,36 @@ const TeamManagement: React.FC = () => {
             </div>
 
             <Card bordered={false} style={{ borderRadius: 12 }}>
-                <Row style={{ marginBottom: 16 }}>
+                <Row style={{ marginBottom: 16 }} gutter={16}>
                     <Col span={8}>
-                        <Input prefix={<SearchOutlined />} placeholder="Tìm kiếm theo Tên hoặc Email..." />
+                        <Input.Search 
+                            placeholder="Tìm kiếm theo Tên hoặc Email..." 
+                            value={inputSearch}
+                            onChange={(e) => setInputSearch(e.target.value)}
+                            onSearch={(value) => setSearchText(value)}
+                            enterButton={<SearchOutlined />}
+                            allowClear
+                            onClear={() => {
+                                setInputSearch('');
+                                setSearchText('');
+                            }}
+                        />
+                    </Col>
+                    <Col span={6}>
+                        <Select 
+                            value={statusFilter} 
+                            onChange={setStatusFilter} 
+                            style={{ width: '100%' }}
+                            options={[
+                                { value: 'all', label: 'Tất cả nhân sự (Trừ bị xóa)' },
+                                { value: 'active', label: 'Đang hoạt động' },
+                                { value: 'inactive', label: 'Đã khóa' },
+                                { value: 'deleted', label: 'Đã bị xóa' },
+                            ]}
+                        />
                     </Col>
                 </Row>
-                <Table columns={columns} dataSource={data} rowKey="id" loading={loading} />
+                <Table columns={columns} dataSource={filteredData} rowKey="id" loading={loading} />
             </Card>
 
             {/* Create User Modal */}

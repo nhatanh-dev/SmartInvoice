@@ -5,6 +5,7 @@ type BadgeType = 'status' | 'risk';
 interface StatusBadgeProps {
     type: BadgeType;
     value: string;
+    isPending?: boolean;
 }
 
 const statusMap: Record<string, { label: string; bgClass: string; textClass: string }> = {

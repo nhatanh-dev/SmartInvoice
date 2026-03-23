@@ -536,9 +536,10 @@ const InvoiceDetail: React.FC = () => {
 
   const mappedValidationResult = {
     extractedData: {
-      total_pre_tax: invoice.totalAmountBeforeTax,
-      total_tax_amount: invoice.totalTaxAmount,
+      total_pre_tax: computedTotalBeforeTax,
+      total_tax_amount: computedTotalTax,
       total_amount: invoice.totalAmount,
+      line_items: invoice.lineItems,
     },
     errorDetails: allErrors,
     warningDetails: allWarnings,

@@ -46,9 +46,9 @@ namespace SmartInvoice.API.Services.Implementations
             return await _unitOfWork.Users.GetAllAsync();
         }
 
-        public async Task<IEnumerable<User>> GetUsersByCompanyIdAsync(Guid companyId)
+        public async Task<IEnumerable<User>> GetUsersByCompanyIdAsync(Guid companyId, bool includeDeleted = false)
         {
-            return await _unitOfWork.Users.GetByCompanyIdAsync(companyId);
+            return await _unitOfWork.Users.GetByCompanyIdAsync(companyId, includeDeleted);
         }
 
         public async Task<User> CreateUserAsync(User user)
