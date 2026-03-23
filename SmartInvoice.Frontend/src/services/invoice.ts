@@ -39,8 +39,6 @@ export interface ValidationResult {
     // Returned by API after saving to DB
     invoiceId?: string;
     isReplacement?: boolean;
-    newVersion?: number;
-    isAutoApproved?: boolean;
 }
 
 export interface BatchSubmitResult {
@@ -98,6 +96,7 @@ export interface ValidationLayerDto {
     validationStatus: string;
     errorCode: string | null;
     errorMessage: string | null;
+    suggestion: string | null;
     errorDetails: string | null; // This is a JSON string of ValidationErrorDetail[]
     layerData: string | null;
     checkedAt: string;
@@ -135,11 +134,23 @@ export interface RiskReason {
     checked_at: string | null;
 }
 
+export interface InvoiceVersionDto {
+    invoiceId: string;
+    version: number;
+    status: string;
+    riskLevel: string;
+    createdAt: string;
+}
+
 export interface InvoiceDetailDto {
     invoiceId: string;
     invoiceNumber: string;
     serialNumber: string | null;
     formNumber: string | null;
+
+    version?: number;
+    isReplaced?: boolean;
+    replacedBy?: string;
     invoiceDate: string;
     status: string;
     riskLevel: string;
@@ -186,6 +197,7 @@ export interface InvoiceDetailDto {
     validationLayers: ValidationLayerDto[];
     riskChecks: RiskCheckDto[];
     auditLogs: AuditLogDto[];
+    extractedData: InvoiceExtractedData | null;
 }
 
 export interface InvoiceStatsDto {
@@ -194,6 +206,31 @@ export interface InvoiceStatsDto {
   validCount: number;
   needReviewCount: number;
   totalCount: number;
+}
+
+export interface UpdateInvoiceDto {
+    invoiceNumber?: string;
+    serialNumber?: string;
+    formNumber?: string;
+    invoiceDate: string;
+    totalAmount: number;
+    totalAmountBeforeTax?: number | null;
+    totalTaxAmount?: number | null;
+    status?: string;
+    notes?: string;
+
+    // Seller
+    sellerName?: string | null;
+    sellerTaxCode?: string | null;
+    sellerAddress?: string | null;
+
+    // Buyer
+    buyerName?: string | null;
+    buyerTaxCode?: string | null;
+    buyerAddress?: string | null;
+
+    // Items
+    lineItems?: LineItemDto[];
 }
 
 // ════════════════════════════════════════════
@@ -233,6 +270,44 @@ export const invoiceService = {
         return response.data;
     },
 
+    // --- Async OCR Upload (Event-Driven Pipeline) ---
+
+    /** Upload image → S3 → SQS → OcrWorkerService (async). Returns 202 immediately. */
+    async uploadImage(file: File): Promise<{ invoiceId: string; s3Key: string; status: string; message: string }> {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await apiClient.post('/invoices/upload-image', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        return response.data;
+    },
+
+    /** Poll invoice status until it leaves "Processing". */
+    async pollInvoiceUntilDone(
+        invoiceId: string,
+        onStatusChange?: (status: string) => void,
+        maxAttempts: number = 60,
+        intervalMs: number = 3000
+    ): Promise<InvoiceDetailDto> {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, intervalMs));
+            try {
+                const detail = await this.getInvoiceDetail(invoiceId);
+                onStatusChange?.(detail.status);
+                if (detail.status !== 'Processing') {
+                    return detail;
+                }
+            } catch (err: any) {
+                // If it's a 404, the invoice was likely deleted by the worker due to fatal errors (e.g duplicate)
+                if (err?.response?.status === 404) {
+                    throw new Error("Hóa đơn đã bị xóa do thông tin không hợp lệ hoặc bị trùng lặp.");
+                }
+                // Otherwise retry on transient network errors
+            }
+        }
+        throw new Error('OCR processing timed out after ' + (maxAttempts * intervalMs / 1000) + 's');
+    },
+
     async getInvoiceStats(startDate: string, endDate: string, status?: string): Promise<InvoiceStatsDto> {
         const res = await apiClient.get('/invoices/stats', {
             params: { startDate, endDate, status }
@@ -269,6 +344,15 @@ export const invoiceService = {
         return response.data;
     },
 
+    async getVisualFileUrl(id: string): Promise<{ url: string }> {
+        const response = await apiClient.get<{ url: string }>(`/invoices/${id}/visual`);
+        return response.data;
+    },
+
+    async updateInvoice(id: string, data: UpdateInvoiceDto): Promise<void> {
+        await apiClient.put(`/invoices/${id}`, data);
+    },
+
     // --- Workflow ---
     async submitInvoice(id: string, comment?: string): Promise<void> {
         await apiClient.post(`/invoices/${id}/submit`, { comment });
@@ -295,6 +379,12 @@ export const invoiceService = {
     // --- Audit Logs ---
     async getAuditLogs(id: string): Promise<AuditLogDto[]> {
         const response = await apiClient.get<AuditLogDto[]>(`/invoices/${id}/audit-logs`);
+        return response.data;
+    },
+
+    // --- Versions ---
+    async getInvoiceVersions(id: string): Promise<InvoiceVersionDto[]> {
+        const response = await apiClient.get<InvoiceVersionDto[]>(`/invoices/${id}/versions`);
         return response.data;
     },
 };

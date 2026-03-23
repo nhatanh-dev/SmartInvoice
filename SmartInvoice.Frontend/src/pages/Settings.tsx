@@ -92,8 +92,6 @@ const Settings: React.FC = () => {
   useEffect(() => {
     if (company) {
       companyForm.setFieldsValue({
-        isAutoApproveEnabled: company.isAutoApproveEnabled,
-        autoApproveThreshold: company.autoApproveThreshold,
       });
     }
   }, [company, companyForm]);
@@ -115,8 +113,6 @@ const Settings: React.FC = () => {
 
   const onCompanyFinish = (values: any) => {
     updateCompanyMutation.mutate({
-      isAutoApproveEnabled: values.isAutoApproveEnabled,
-      autoApproveThreshold: values.autoApproveThreshold || 0,
     });
   };
 
@@ -152,7 +148,7 @@ const Settings: React.FC = () => {
       <div style={{ display: "flex", gap: 24 }}>
         {/* Sidebar Tabs */}
         <div style={{ width: 250, flexShrink: 0 }}>
-          <Card bodyStyle={{ padding: 0 }} className="settings-sidebar">
+          <Card styles={{ body: { padding: 0 } }} className="settings-sidebar">
             <div
               style={{
                 padding: "16px 20px",
@@ -215,7 +211,7 @@ const Settings: React.FC = () => {
           {activeTab === "profile" && (
             <Card
               title="Hồ sơ cá nhân"
-              bordered={false}
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,
@@ -267,7 +263,7 @@ const Settings: React.FC = () => {
           {activeTab === "notifications" && (
             <Card
               title="Cài đặt thông báo"
-              bordered={false}
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,
@@ -349,7 +345,7 @@ const Settings: React.FC = () => {
           {isCompanyAdmin && activeTab === "company" && company && (
             <Card
               title="Cấu hình Công ty & Luồng duyệt"
-              bordered={false}
+              variant="borderless"
               style={{
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                 borderRadius: 12,
@@ -384,83 +380,6 @@ const Settings: React.FC = () => {
                 form={companyForm}
                 onFinish={onCompanyFinish}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 16,
-                  }}
-                >
-                  <div>
-                    <Text strong style={{ display: "block", fontSize: 15 }}>
-                      Tự động duyệt hóa đơn
-                    </Text>
-                    <Text
-                      type="secondary"
-                      style={{ fontSize: 13, display: "block", maxWidth: 450 }}
-                    >
-                      Kích hoạt chức năng này để hệ thống tự động phê duyệt các
-                      hóa đơn hợp lệ (Màu Xanh lá) mà không cần can thiệp thủ
-                      công, dựa trên ngưỡng giá trị.
-                    </Text>
-                  </div>
-                  <Form.Item
-                    name="isAutoApproveEnabled"
-                    valuePropName="checked"
-                    noStyle
-                  >
-                    <Switch />
-                  </Form.Item>
-                </div>
-
-                <Form.Item
-                  noStyle
-                  shouldUpdate={(prevValues, currentValues) =>
-                    prevValues.isAutoApproveEnabled !==
-                    currentValues.isAutoApproveEnabled
-                  }
-                >
-                  {({ getFieldValue }) => {
-                    const isEnabled = getFieldValue("isAutoApproveEnabled");
-                    return (
-                      <div
-                        style={{
-                          opacity: isEnabled ? 1 : 0.5,
-                          pointerEvents: isEnabled ? "auto" : "none",
-                          padding: "16px",
-                          background: "#F8FAFC",
-                          borderRadius: 8,
-                        }}
-                      >
-                        <Form.Item
-                          label="Ngưỡng tự động duyệt (VND)"
-                          name="autoApproveThreshold"
-                          rules={[
-                            {
-                              required: isEnabled,
-                              message: "Vui lòng nhập số tiền",
-                            },
-                          ]}
-                        >
-                          <InputNumber
-                            style={{ width: "100%", maxWidth: 300 }}
-                            formatter={(value) =>
-                              `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-                            }
-                            parser={(value: any) =>
-                              value!.replace(/\$\s?|(,*)/g, "")
-                            }
-                          />
-                        </Form.Item>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          Hóa đơn hợp lệ có Tổng tiền bằng hoặc nhỏ hơn mức này
-                          sẽ được tự động duyệt.
-                        </Text>
-                      </div>
-                    );
-                  }}
-                </Form.Item>
 
                 <div style={{ marginTop: 24 }}>
                   <Button

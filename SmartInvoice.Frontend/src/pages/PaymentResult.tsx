@@ -65,7 +65,7 @@ const PaymentResult: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-dash-bg">
-        <Spin size="large" tip="Đang xử lý kết quả thanh toán..." />
+        <Spin size="large" description="Đang xử lý kết quả thanh toán..." />
       </div>
     );
   }

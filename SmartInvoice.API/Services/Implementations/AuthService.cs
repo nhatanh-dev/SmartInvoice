@@ -182,7 +182,7 @@ namespace SmartInvoice.API.Services.Implementations
             try
             {
                 // Fetch FREE package
-                var freePackage = await _context.SubscriptionPackages.FirstOrDefaultAsync(p => p.PackageCode == "FREE") 
+                var freePackage = await _context.SubscriptionPackages.FirstOrDefaultAsync(p => p.PackageCode == "FREE")
                     ?? throw new Exception("Không tìm thấy gói mặc định (FREE) trong hệ thống.");
 
                 // Create Company using validated data from VietQR
@@ -534,6 +534,7 @@ namespace SmartInvoice.API.Services.Implementations
             {
                 // 2. Create a dummy "System Administration" company
                 var companyId = Guid.NewGuid();
+                var enterprisePackageId = Guid.Parse("44444444-4444-4444-4444-444444444444");
                 var company = new Company
                 {
                     CompanyId = companyId,
@@ -543,6 +544,7 @@ namespace SmartInvoice.API.Services.Implementations
                     Email = normalizedEmail,
                     PhoneNumber = "0000000000",
                     SubscriptionTier = SubscriptionTier.Enterprise.ToString(),
+                    SubscriptionPackageId = enterprisePackageId,
                     IsActive = true
                 };
                 await _unitOfWork.Companies.AddAsync(company);
@@ -576,6 +578,17 @@ namespace SmartInvoice.API.Services.Implementations
                     Username = normalizedEmail
                 };
                 await _cognitoClient.AdminConfirmSignUpAsync(confirmRequest);
+
+                var updateAttributesRequest = new AdminUpdateUserAttributesRequest
+                {
+                    UserPoolId = _userPoolId,
+                    Username = normalizedEmail,
+                    UserAttributes = new List<AttributeType>
+                    {
+                        new AttributeType { Name = "email_verified", Value = "true" }
+                    }
+                };
+                await _cognitoClient.AdminUpdateUserAttributesAsync(updateAttributesRequest);
 
                 // 5. Create Local User with SuperAdmin Role
                 var user = new User

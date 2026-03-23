@@ -101,9 +101,6 @@ namespace SmartInvoice.API.Migrations
                     b.Property<string>("Address")
                         .HasColumnType("text");
 
-                    b.Property<decimal>("AutoApproveThreshold")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<string>("BillingCycle")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -143,9 +140,6 @@ namespace SmartInvoice.API.Migrations
                         .HasColumnType("integer");
 
                     b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsAutoApproveEnabled")
                         .HasColumnType("boolean");
 
                     b.Property<bool>("IsDeleted")
@@ -1146,13 +1140,13 @@ namespace SmartInvoice.API.Migrations
                         new
                         {
                             ConfigId = 1,
-                            Category = "AI & OCR",
-                            ConfigKey = "OcrApiEndpoint",
-                            ConfigType = "String",
-                            ConfigValue = "http://localhost:5000/process_invoice",
+                            Category = "Business Logic",
+                            ConfigKey = "CURRENCY_TOLERANCE",
+                            ConfigType = "Integer",
+                            ConfigValue = "10",
                             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            DefaultValue = "http://localhost:5000/process_invoice",
-                            Description = "Endpoint kết nối với dịch vụ OCR Python.",
+                            DefaultValue = "10",
+                            Description = "Dung sai làm tròn tiền (VNĐ)",
                             IsEncrypted = false,
                             IsReadOnly = false,
                             RequiresRestart = false,
@@ -1161,13 +1155,13 @@ namespace SmartInvoice.API.Migrations
                         new
                         {
                             ConfigId = 2,
-                            Category = "AI & OCR",
-                            ConfigKey = "ConfidenceThreshold",
-                            ConfigType = "Integer",
-                            ConfigValue = "0.85",
+                            Category = "Business Logic",
+                            ConfigKey = "ENABLE_VIETQR_VALIDATION",
+                            ConfigType = "Boolean",
+                            ConfigValue = "true",
                             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            DefaultValue = "0.85",
-                            Description = "Ngưỡng độ tin cậy để tự động chấp nhận kết quả OCR.",
+                            DefaultValue = "true",
+                            Description = "Xác thực MST qua VietQR",
                             IsEncrypted = false,
                             IsReadOnly = false,
                             RequiresRestart = false,
@@ -1176,13 +1170,13 @@ namespace SmartInvoice.API.Migrations
                         new
                         {
                             ConfigId = 3,
-                            Category = "Hệ thống",
-                            ConfigKey = "MaxUploadSizeMB",
+                            Category = "System & Storage",
+                            ConfigKey = "MAX_UPLOAD_SIZE_MB",
                             ConfigType = "Integer",
                             ConfigValue = "10",
                             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
                             DefaultValue = "10",
-                            Description = "Dung lượng tối đa cho mỗi file upload (MB).",
+                            Description = "Giới hạn dung lượng tải file (MB)",
                             IsEncrypted = false,
                             IsReadOnly = false,
                             RequiresRestart = false,
@@ -1191,28 +1185,13 @@ namespace SmartInvoice.API.Migrations
                         new
                         {
                             ConfigId = 4,
-                            Category = "AI & OCR",
-                            ConfigKey = "AllowMachineLearning",
+                            Category = "System & Storage",
+                            ConfigKey = "MAINTENANCE_MODE",
                             ConfigType = "Boolean",
-                            ConfigValue = "true",
+                            ConfigValue = "false",
                             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            DefaultValue = "true",
-                            Description = "Cho phép AI học từ dữ liệu chỉnh sửa của người dùng.",
-                            IsEncrypted = false,
-                            IsReadOnly = false,
-                            RequiresRestart = false,
-                            UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
-                        },
-                        new
-                        {
-                            ConfigId = 5,
-                            Category = "Hệ thống",
-                            ConfigKey = "SyncIntervalMinutes",
-                            ConfigType = "Integer",
-                            ConfigValue = "15",
-                            CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            DefaultValue = "15",
-                            Description = "Thời gian đồng bộ dữ liệu với AWS S3 (phút).",
+                            DefaultValue = "false",
+                            Description = "Chế độ bảo trì (Chặn thao tác)",
                             IsEncrypted = false,
                             IsReadOnly = false,
                             RequiresRestart = false,

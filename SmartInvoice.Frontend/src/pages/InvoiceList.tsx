@@ -380,7 +380,7 @@ const InvoiceList: React.FC = () => {
         </Space>
       </div>
 
-      <Card bordered={false} className="bg-dash-card rounded-[14px] shadow-dash overflow-hidden" bodyStyle={{ padding: 0 }}>
+      <Card variant="borderless" className="bg-dash-card rounded-[14px] shadow-dash overflow-hidden" styles={{ body: { padding: 0 } }}>
         {/* Bulk Action Bar */}
         {selectedRowKeys.length > 0 && (
           <div style={{ padding: '12px 24px', background: '#f0f5ff', borderBottom: '1px solid #d6e4ff', display: 'flex', alignItems: 'center', gap: 12 }}>

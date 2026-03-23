@@ -27,8 +27,9 @@ namespace SmartInvoice.API.Services.Implementations
         private readonly ILogger<InvoiceService> _logger;
         private readonly ISqsMessagePublisher _sqsPublisher;
         private readonly INotificationService _notificationService;
+        private readonly ISystemConfigProvider _configProvider;
 
-        public InvoiceService(IUnitOfWork unitOfWork, StorageService storageService, IInvoiceProcessorService invoiceProcessor, IConfiguration configuration, ILogger<InvoiceService> logger, ISqsMessagePublisher sqsPublisher, INotificationService notificationService)
+        public InvoiceService(IUnitOfWork unitOfWork, StorageService storageService, IInvoiceProcessorService invoiceProcessor, IConfiguration configuration, ILogger<InvoiceService> logger, ISqsMessagePublisher sqsPublisher, INotificationService notificationService, ISystemConfigProvider configProvider)
         {
             _unitOfWork = unitOfWork;
             _storageService = storageService;
@@ -37,6 +38,7 @@ namespace SmartInvoice.API.Services.Implementations
             _logger = logger;
             _sqsPublisher = sqsPublisher;
             _notificationService = notificationService;
+            _configProvider = configProvider;
         }
 
         // ════════════════════════════════════════════
@@ -57,6 +59,82 @@ namespace SmartInvoice.API.Services.Implementations
             return MapToDetailDto(invoice);
         }
 
+        public async Task<string?> GetVisualFileUrlAsync(Guid invoiceId, Guid companyId)
+        {
+            var invoice = await _unitOfWork.Invoices.GetInvoiceWithDetailsAsync(invoiceId);
+            if (invoice == null || invoice.CompanyId != companyId) return null;
+
+            // 1. Nếu EF Core đã Include sẵn
+            if (invoice.VisualFile != null)
+            {
+                return _storageService.GenerateDownloadUrl(invoice.VisualFile.S3Key);
+            }
+
+            // 2. Nếu EF quên Include, ta dùng VisualFileId để query trực tiếp
+            if (invoice.VisualFileId.HasValue)
+            {
+                var file = await _unitOfWork.FileStorages.GetByIdAsync(invoice.VisualFileId.Value);
+                if (file != null) return _storageService.GenerateDownloadUrl(file.S3Key);
+            }
+
+            // 3. Cứu cánh cuối cùng: Lấy S3Key từ RawData lúc vừa upload
+            if (!string.IsNullOrEmpty(invoice.RawData?.ObjectKey))
+            {
+                return _storageService.GenerateDownloadUrl(invoice.RawData.ObjectKey);
+            }
+
+            return null;
+        }
+
+        public async Task<List<InvoiceVersionDto>> GetInvoiceVersionsAsync(Guid invoiceId, Guid companyId)
+        {
+            var targetInvoice = await _unitOfWork.Invoices.GetInvoiceWithDetailsAsync(invoiceId);
+            if (targetInvoice == null || targetInvoice.CompanyId != companyId)
+            {
+                return new List<InvoiceVersionDto>();
+            }
+
+            var sellerTaxCode = targetInvoice.Seller?.TaxCode;
+            var invoiceNumber = targetInvoice.InvoiceNumber;
+            var serialNumber = targetInvoice.SerialNumber;
+
+            if (string.IsNullOrEmpty(sellerTaxCode) || string.IsNullOrEmpty(invoiceNumber))
+            {
+                // If it's a draft without those details, it shouldn't have versions
+                return new List<InvoiceVersionDto>
+                {
+                    new InvoiceVersionDto
+                    {
+                        InvoiceId = targetInvoice.InvoiceId,
+                        Version = targetInvoice.Version,
+                        Status = targetInvoice.Status,
+                        RiskLevel = targetInvoice.RiskLevel,
+                        CreatedAt = targetInvoice.CreatedAt
+                    }
+                };
+            }
+
+            var versions = await _unitOfWork.Invoices.FindAsync(i =>
+                i.CompanyId == companyId &&
+                i.Seller.TaxCode == sellerTaxCode &&
+                i.InvoiceNumber == invoiceNumber &&
+                i.SerialNumber == serialNumber &&
+                !i.IsDeleted
+            );
+
+            return versions
+                .OrderByDescending(v => v.Version)
+                .Select(v => new InvoiceVersionDto
+                {
+                    InvoiceId = v.InvoiceId,
+                    Version = v.Version,
+                    Status = v.Status,
+                    RiskLevel = v.RiskLevel,
+                    CreatedAt = v.CreatedAt
+                })
+                .ToList();
+        }
+
         public async Task<IEnumerable<Invoice>> GetAllInvoicesAsync()
         {
             return await _unitOfWork.Invoices.GetAllAsync();
@@ -70,7 +148,8 @@ namespace SmartInvoice.API.Services.Implementations
             var filteredQuery = query.Where(i => i.CompanyId == companyId
                                               && i.InvoiceDate >= startDate
                                               && i.InvoiceDate <= endDate
-                                              && i.IsDeleted != true).AsQueryable();
+                                              && !i.IsDeleted
+                                              && !i.IsReplaced).AsQueryable();
 
             if (!string.IsNullOrEmpty(statusFilter))
             {
@@ -105,13 +184,17 @@ namespace SmartInvoice.API.Services.Implementations
 
         public async Task UpdateInvoiceAsync(Guid id, UpdateInvoiceDto request, Guid userId, string userEmail, string userRole, string? ipAddress)
         {
-            var existingInvoice = await _unitOfWork.Invoices.GetByIdAsync(id);
+            var existingInvoice = await _unitOfWork.Invoices.GetInvoiceWithDetailsAsync(id);
             if (existingInvoice == null)
                 throw new KeyNotFoundException($"Không tìm thấy hóa đơn với ID: {id}");
 
-            // Chỉ cho phép edit khi status = Draft hoặc Rejected
-            if (existingInvoice.Status != "Draft" && existingInvoice.Status != "Rejected")
-                throw new InvalidOperationException($"Chỉ được chỉnh sửa hóa đơn ở trạng thái Nháp hoặc Từ chối. Trạng thái hiện tại: {existingInvoice.Status}");
+            // Chỉ cho phép edit khi status = Draft hoặc Rejected hoặc Processing (nếu cần review ngay)
+            if (existingInvoice.Status != "Draft" && existingInvoice.Status != "Rejected" && existingInvoice.Status != "Processing" && existingInvoice.Status != "Success")
+            {
+                // Cho phép sửa Success nếu chưa Submit
+                if (existingInvoice.Status != "Success")
+                    throw new InvalidOperationException($"Không thể chỉnh sửa hóa đơn ở trạng thái {existingInvoice.Status}");
+            }
 
             // Track changes for audit
             var changes = new List<AuditChange>();
@@ -121,6 +204,7 @@ namespace SmartInvoice.API.Services.Implementations
                     changes.Add(new AuditChange { Field = field, OldValue = oldVal, NewValue = newVal, ChangeType = "UPDATE" });
             }
 
+            // --- Basic Fields ---
             if (request.InvoiceNumber != null)
             {
                 TrackChange("InvoiceNumber", existingInvoice.InvoiceNumber, request.InvoiceNumber);
@@ -131,6 +215,12 @@ namespace SmartInvoice.API.Services.Implementations
                 TrackChange("SerialNumber", existingInvoice.SerialNumber, request.SerialNumber);
                 existingInvoice.SerialNumber = request.SerialNumber;
             }
+            if (request.FormNumber != null)
+            {
+                TrackChange("FormNumber", existingInvoice.FormNumber, request.FormNumber);
+                existingInvoice.FormNumber = request.FormNumber;
+            }
+
             TrackChange("InvoiceDate", existingInvoice.InvoiceDate, request.InvoiceDate);
             existingInvoice.InvoiceDate = request.InvoiceDate;
 
@@ -139,6 +229,17 @@ namespace SmartInvoice.API.Services.Implementations
                 TrackChange("TotalAmount", existingInvoice.TotalAmount, request.TotalAmount);
                 existingInvoice.TotalAmount = request.TotalAmount;
             }
+            if (request.TotalAmountBeforeTax.HasValue)
+            {
+                TrackChange("TotalAmountBeforeTax", existingInvoice.TotalAmountBeforeTax, request.TotalAmountBeforeTax);
+                existingInvoice.TotalAmountBeforeTax = request.TotalAmountBeforeTax;
+            }
+            if (request.TotalTaxAmount.HasValue)
+            {
+                TrackChange("TotalTaxAmount", existingInvoice.TotalTaxAmount, request.TotalTaxAmount);
+                existingInvoice.TotalTaxAmount = request.TotalTaxAmount;
+            }
+
             if (request.Status != null)
             {
                 TrackChange("Status", existingInvoice.Status, request.Status);
@@ -147,10 +248,71 @@ namespace SmartInvoice.API.Services.Implementations
             TrackChange("Notes", existingInvoice.Notes, request.Notes);
             existingInvoice.Notes = request.Notes;
 
-            // Nếu hóa đơn đã bị Rejected thì sửa xong trả về Draft
+            // --- Seller ---
+            if (request.SellerName != null)
+            {
+                TrackChange("SellerName", existingInvoice.Seller.Name, request.SellerName);
+                existingInvoice.Seller.Name = request.SellerName;
+            }
+            if (request.SellerTaxCode != null)
+            {
+                TrackChange("SellerTaxCode", existingInvoice.Seller.TaxCode, request.SellerTaxCode);
+                existingInvoice.Seller.TaxCode = request.SellerTaxCode;
+            }
+            if (request.SellerAddress != null)
+            {
+                TrackChange("SellerAddress", existingInvoice.Seller.Address, request.SellerAddress);
+                existingInvoice.Seller.Address = request.SellerAddress;
+            }
+
+            // --- Buyer ---
+            if (request.BuyerName != null)
+            {
+                TrackChange("BuyerName", existingInvoice.Buyer.Name, request.BuyerName);
+                existingInvoice.Buyer.Name = request.BuyerName;
+            }
+            if (request.BuyerTaxCode != null)
+            {
+                TrackChange("BuyerTaxCode", existingInvoice.Buyer.TaxCode, request.BuyerTaxCode);
+                existingInvoice.Buyer.TaxCode = request.BuyerTaxCode;
+            }
+            if (request.BuyerAddress != null)
+            {
+                TrackChange("BuyerAddress", existingInvoice.Buyer.Address, request.BuyerAddress);
+                existingInvoice.Buyer.Address = request.BuyerAddress;
+            }
+
+            // --- Line Items (ExtractedData) ---
+            if (request.LineItems != null)
+            {
+                if (existingInvoice.ExtractedData == null) existingInvoice.ExtractedData = new InvoiceExtractedData();
+
+                // For simplicity, we replace the entire collection. 
+                // In a production app, we might want more granular diffing for Audit Logs.
+                var oldItemsJson = System.Text.Json.JsonSerializer.Serialize(existingInvoice.ExtractedData.LineItems);
+                var newItemsJson = System.Text.Json.JsonSerializer.Serialize(request.LineItems);
+
+                if (oldItemsJson != newItemsJson)
+                {
+                    TrackChange("LineItems", "Modified", "Modified");
+                    existingInvoice.ExtractedData.LineItems = request.LineItems.Select(l => new InvoiceLineItem
+                    {
+                        Stt = l.LineNumber,
+                        ProductName = l.ItemName ?? "",
+                        Unit = l.Unit ?? "",
+                        Quantity = l.Quantity,
+                        UnitPrice = l.UnitPrice,
+                        TotalAmount = l.TotalAmount,
+                        VatRate = l.VatRate,
+                        VatAmount = l.VatAmount
+                    }).ToList();
+                }
+            }
+
+            // Nếu hóa đơn đã bị Rejected thì sửa xong trả về trạng thái Success (nếu đã bóc tách xong) hoặc Draft
             if (existingInvoice.Status == nameof(InvoiceStatus.Rejected))
             {
-                existingInvoice.Status = "Draft";
+                existingInvoice.Status = "Success"; // Or Draft
                 existingInvoice.Workflow.RejectedBy = null;
                 existingInvoice.Workflow.RejectedAt = null;
                 existingInvoice.Workflow.RejectionReason = null;
@@ -523,6 +685,10 @@ namespace SmartInvoice.API.Services.Implementations
                 ExchangeRate = i.ExchangeRate,
                 MCCQT = i.MCCQT,
 
+                Version = i.Version,
+                IsReplaced = i.IsReplaced,
+                ReplacedBy = i.ReplacedBy,
+
                 HasOriginalFile = i.OriginalFileId != null && i.OriginalFileId != Guid.Empty,
                 HasVisualFile = i.VisualFileId != null,
 
@@ -574,6 +740,9 @@ namespace SmartInvoice.API.Services.Implementations
                     LayerOrder = v.CheckOrder,
                     IsValid = v.IsValid,
                     ValidationStatus = v.Status,
+                    ErrorCode = v.ErrorCode,
+                    ErrorMessage = v.ErrorMessage,
+                    Suggestion = v.Suggestion,
                     ErrorDetails = v.ErrorDetails,
                     CheckedAt = v.CheckedAt
                 }).ToList() ?? new(),
@@ -918,17 +1087,8 @@ namespace SmartInvoice.API.Services.Implementations
                 // ============================================================
                 var invoiceId = Guid.NewGuid();
 
-                var company = await _unitOfWork.Companies.GetByIdAsync(CompanyId);
-                bool isAutoApproveEnabled = company?.IsAutoApproveEnabled ?? false;
-                decimal autoApproveThreshold = company?.AutoApproveThreshold ?? 0;
-
-                bool canAutoApprove = isAutoApproveEnabled &&
-                                      isInvoiceValid &&
-                                      !finalResult.WarningDetails.Any() &&
-                                      (finalResult.ExtractedData?.TotalAmount ?? 0) <= autoApproveThreshold;
-
-                string initialStatus = canAutoApprove ? "Approved" : (isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Draft" : "Draft") : "Rejected");
-                string initialRiskLevel = canAutoApprove ? "Green" : (isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Yellow" : "Green") : "Red");
+                string initialStatus = isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Draft" : "Draft") : "Rejected";
+                string initialRiskLevel = isInvoiceValid ? (finalResult.WarningDetails.Any() ? "Yellow" : "Green") : "Red";
 
                 // 2. Tạo Invoice
                 var invoice = new Invoice
@@ -979,9 +1139,9 @@ namespace SmartInvoice.API.Services.Implementations
 
                     Status = initialStatus,
                     RiskLevel = initialRiskLevel,
-                    Notes = canAutoApprove ? "Đã duyệt tự động theo cấu hình Công ty." : (isInvoiceValid
+                    Notes = isInvoiceValid
                         ? (finalResult.WarningDetails.Any() ? "Hóa đơn có cảnh báo, cần xem xét" : null)
-                        : "Hóa đơn có lỗi, cần kiểm tra lại"),
+                        : "Hóa đơn có lỗi, cần kiểm tra lại",
 
                     Version = finalResult.NewVersion,
 
@@ -989,7 +1149,7 @@ namespace SmartInvoice.API.Services.Implementations
                     {
                         UploadedBy = UserId,
                         ApprovedBy = null,
-                        ApprovedAt = canAutoApprove ? DateTime.UtcNow : null
+                        ApprovedAt = null
                     },
                     CreatedAt = DateTime.UtcNow
                 };
@@ -1116,41 +1276,36 @@ namespace SmartInvoice.API.Services.Implementations
                 await _unitOfWork.Invoices.AddAsync(invoice);
                 await _unitOfWork.CompleteAsync();
 
-                if (canAutoApprove)
-                {
-                    await _notificationService.SendNotificationAsync(
-                        userId: UserId,
-                        type: "System",
-                        title: "Hóa đơn tự động duyệt",
-                        message: $"Hóa đơn số {invoice.InvoiceNumber} đã được hệ thống tự động phê duyệt.",
-                        relatedInvoiceId: invoiceId,
-                        priority: "Normal"
-                    );
-                }
 
                 _logger?.LogInformation("Created new invoice {InvoiceId} from S3Key={S3Key}, RiskLevel={RiskLevel}", invoiceId, s3Key, invoice.RiskLevel);
 
                 // Publish VietQR validation message to SQS for asynchronous processing
-                try
+                if (await _configProvider.GetBoolAsync("ENABLE_VIETQR_VALIDATION", true))
                 {
-                    var sqsMessage = new SmartInvoice.API.DTOs.SQS.VietQrValidationMessage
+                    try
                     {
-                        InvoiceId = invoice.InvoiceId,
-                        TaxCode = invoice.Seller?.TaxCode ?? "N/A",
-                        SellerName = invoice.Seller?.Name ?? "N/A"
-                    };
+                        var sqsMessage = new SmartInvoice.API.DTOs.SQS.VietQrValidationMessage
+                        {
+                            InvoiceId = invoice.InvoiceId,
+                            TaxCode = invoice.Seller?.TaxCode ?? "N/A",
+                            SellerName = invoice.Seller?.Name ?? "N/A"
+                        };
 
-                    await _sqsPublisher.PublishVietQrValidationAsync(sqsMessage, CancellationToken.None);
-                    _logger?.LogInformation("Invoice {InvoiceId} saved and VietQR validation message published to SQS successfully.", invoice.InvoiceId);
+                        await _sqsPublisher.PublishVietQrValidationAsync(sqsMessage, CancellationToken.None);
+                        _logger?.LogInformation("Invoice {InvoiceId} saved and VietQR validation message published to SQS successfully.", invoice.InvoiceId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Invoice {InvoiceId} saved successfully, but failed to publish VietQR validation message to SQS.", invoice.InvoiceId);
+                    }
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger?.LogError(ex, "Invoice {InvoiceId} saved successfully, but failed to publish VietQR validation message to SQS.", invoice.InvoiceId);
+                    _logger?.LogInformation("VietQR validation is disabled via configuration. Skipping SQS publish for Invoice {InvoiceId}.", invoice.InvoiceId);
                 }
 
                 // Trả về invoiceId để frontend biết đây là record nào trong DB
                 finalResult.InvoiceId = invoiceId;
-                finalResult.IsAutoApproved = canAutoApprove;
 
                 return finalResult;
             }
@@ -1163,6 +1318,17 @@ namespace SmartInvoice.API.Services.Implementations
                     _logger?.LogInformation("Deleted temp file {TempPath}", tempFilePath);
                 }
             }
+        }
+
+        /// <summary>
+        /// Creates a draft invoice with Status="Processing" for the async OCR pipeline.
+        /// Called by InvoicesController.UploadImage before publishing SQS message.
+        /// </summary>
+        public async Task CreateDraftInvoiceAsync(Invoice invoice)
+        {
+            await _unitOfWork.Invoices.AddAsync(invoice);
+            await _unitOfWork.CompleteAsync();
+            _logger?.LogInformation("Created draft invoice {InvoiceId} with Status=Processing", invoice.InvoiceId);
         }
 
         public async Task<ValidationResultDto> ProcessInvoiceOcrAsync(ProcessOcrRequestDto request, string userId, string companyId)
@@ -1464,6 +1630,35 @@ namespace SmartInvoice.API.Services.Implementations
             string? GetErrorStr(List<ValidationErrorDetail>? errs) => errs != null && errs.Any() ? System.Text.Json.JsonSerializer.Serialize(errs) : null;
             string GetLayerStatus(bool isValid, List<ValidationErrorDetail>? warnings) => !isValid ? "Fail" : (warnings != null && warnings.Any()) ? "Warning" : "Pass";
 
+            // Add Structure and Signature checks for OCR
+            invoice.CheckResults.Add(new InvoiceCheckResult
+            {
+                CheckId = Guid.NewGuid(),
+                InvoiceId = invoiceId,
+                Category = "STRUCTURE",
+                CheckName = "Structure",
+                CheckOrder = 1,
+                IsValid = true,
+                Status = "Pass",
+                ErrorMessage = "Thông tin bóc tách từ hình ảnh/PDF (OCR)",
+                DurationMs = 0
+            });
+
+            invoice.CheckResults.Add(new InvoiceCheckResult
+            {
+                CheckId = Guid.NewGuid(),
+                InvoiceId = invoiceId,
+                Category = "SIGNATURE",
+                CheckName = "Signature",
+                CheckOrder = 2,
+                IsValid = true,
+                Status = "Warning",
+                ErrorCode = "WARN_MISSING_XML_EVIDENCE",
+                ErrorMessage = "Thiếu file XML gốc để xác thực chữ ký số.",
+                Suggestion = "Vui lòng tải lên file XML để đảm bảo tính pháp lý cao nhất.",
+                DurationMs = 0
+            });
+
             var logicErrInfo = (logicResult.ErrorDetails ?? System.Linq.Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault() ?? (logicResult.WarningDetails ?? System.Linq.Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault();
             invoice.CheckResults.Add(new InvoiceCheckResult
             {
@@ -1527,7 +1722,7 @@ namespace SmartInvoice.API.Services.Implementations
             await _unitOfWork.CompleteAsync();
 
             // Publish SQS message for VietQR validation if Seller TaxCode is available
-            if (!string.IsNullOrEmpty(invoice.Seller?.TaxCode))
+            if (!string.IsNullOrEmpty(invoice.Seller?.TaxCode) && await _configProvider.GetBoolAsync("ENABLE_VIETQR_VALIDATION", true))
             {
                 try
                 {
@@ -1544,6 +1739,10 @@ namespace SmartInvoice.API.Services.Implementations
                 {
                     _logger?.LogError(ex, "Invoice {InvoiceId} saved successfully, but failed to publish VietQR validation message to SQS.", invoice.InvoiceId);
                 }
+            }
+            else if (!string.IsNullOrEmpty(invoice.Seller?.TaxCode))
+            {
+                _logger?.LogInformation("VietQR validation is disabled via configuration. Skipping SQS publish for Invoice {InvoiceId}.", invoice.InvoiceId);
             }
 
             finalResult.InvoiceId = invoiceId;

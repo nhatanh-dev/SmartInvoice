@@ -43,9 +43,7 @@ namespace SmartInvoice.API.Controllers
                 CompanyName = company.CompanyName,
                 TaxCode = company.TaxCode,
                 Address = company.Address,
-                PhoneNumber = company.PhoneNumber,
-                IsAutoApproveEnabled = company.IsAutoApproveEnabled,
-                AutoApproveThreshold = company.AutoApproveThreshold
+                PhoneNumber = company.PhoneNumber
             };
 
             return Ok(dto);
@@ -62,9 +60,6 @@ namespace SmartInvoice.API.Controllers
             var company = await _companyService.GetByIdAsync(companyId);
             if (company == null) return NotFound(new { Message = "Company not found." });
 
-            company.IsAutoApproveEnabled = request.IsAutoApproveEnabled;
-            // threshold should not be negative
-            company.AutoApproveThreshold = request.AutoApproveThreshold >= 0 ? request.AutoApproveThreshold : 0;
             company.UpdatedAt = DateTime.UtcNow;
 
             await _companyService.UpdateAsync(company);

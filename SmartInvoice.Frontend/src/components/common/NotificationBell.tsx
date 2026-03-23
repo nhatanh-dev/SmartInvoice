@@ -120,7 +120,7 @@ const NotificationBell: React.FC = () => {
   );
 
   return (
-    <Dropdown dropdownRender={dropdownRender} trigger={['click']} placement="bottomRight">
+    <Dropdown popupRender={dropdownRender} trigger={['click']} placement="bottomRight">
       <Badge count={unreadCount} size="small" offset={[-2, 2]}>
         <Button
           type="text"

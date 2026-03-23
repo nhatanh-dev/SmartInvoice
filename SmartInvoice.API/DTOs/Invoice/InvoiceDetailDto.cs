@@ -20,6 +20,11 @@ public class InvoiceDetailDto
     public decimal ExchangeRate { get; set; }
     public string? MCCQT { get; set; }
 
+    // ─── Versioning ───
+    public int Version { get; set; }
+    public bool? IsReplaced { get; set; }
+    public Guid? ReplacedBy { get; set; }
+
     // ─── Invoice Dossier ───
     /// <summary>True if the invoice has an XML original file (OriginalFileId is set).</summary>
     public bool HasOriginalFile { get; set; }
@@ -87,6 +92,9 @@ public class ValidationLayerDto
     public int LayerOrder { get; set; }
     public bool IsValid { get; set; }
     public string ValidationStatus { get; set; } = null!;
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? Suggestion { get; set; }
     public string? ErrorDetails { get; set; }
     public DateTime CheckedAt { get; set; }
 }

@@ -251,7 +251,7 @@ const ApprovalDashboard: React.FC = () => {
         <Col span={6}>
           <Card
             style={{ borderRadius: 12, borderLeft: "4px solid #1677ff" }}
-            bodyStyle={{ padding: "16px 20px" }}
+            styles={{ body: { padding: "16px 20px" } }}
           >
             <Text type="secondary">Tổng số chờ duyệt</Text>
             <Title level={2} style={{ margin: "4px 0 0" }}>
@@ -265,7 +265,7 @@ const ApprovalDashboard: React.FC = () => {
               borderRadius: 12,
               borderLeft: `4px solid ${riskColors.Green}`,
             }}
-            bodyStyle={{ padding: "16px 20px" }}
+            styles={{ body: { padding: "16px 20px" } }}
           >
             <Text type="secondary">An toàn (Green)</Text>
             <Title
@@ -282,7 +282,7 @@ const ApprovalDashboard: React.FC = () => {
               borderRadius: 12,
               borderLeft: `4px solid ${riskColors.Yellow}`,
             }}
-            bodyStyle={{ padding: "16px 20px" }}
+            styles={{ body: { padding: "16px 20px" } }}
           >
             <Text type="secondary">Cần lưu ý (Yellow)</Text>
             <Title
@@ -299,7 +299,7 @@ const ApprovalDashboard: React.FC = () => {
               borderRadius: 12,
               borderLeft: `4px solid ${riskColors.Red}`,
             }}
-            bodyStyle={{ padding: "16px 20px" }}
+            styles={{ body: { padding: "16px 20px" } }}
           >
             <Text type="secondary">Rủi ro (Red)</Text>
             <Title
@@ -312,7 +312,7 @@ const ApprovalDashboard: React.FC = () => {
         </Col>
       </Row>
 
-      <Card bordered={false} style={{ borderRadius: 12 }}>
+      <Card variant="borderless" style={{ borderRadius: 12 }}>
         <div
           style={{
             display: "flex",
