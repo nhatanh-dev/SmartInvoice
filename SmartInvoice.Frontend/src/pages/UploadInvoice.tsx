@@ -112,9 +112,9 @@ const UploadInvoice: React.FC = () => {
     null,
   );
 
-  // OCR Review Modal State
-  const [reviewModalVisible, setReviewModalVisible] = useState(false);
-  const [reviewInvoiceId, setReviewInvoiceId] = useState<string | null>(null);
+  // ════════════════════════════════════════════════════════════════════════
+  // 🛠️ COMPONENT HELPERS
+  // ════════════════════════════════════════════════════════════════════════
 
   const getDefaultSelected = (res: ProcessResult[]) =>
     res
@@ -124,15 +124,239 @@ const UploadInvoice: React.FC = () => {
       )
       .map((r) => r.fileName);
 
+  // Helper to update result state from detail (OCR mapping logic extracted)
+  const updateResultWithDetail = (i: number, detail: any) => {
+    const isFailed = detail.status === "Failed" || detail.status === "Rejected";
+    const hasWarnings =
+      detail.riskLevel === "Yellow" || detail.riskLevel === "Orange";
+
+    const warningDetails: any[] = [];
+    const errorDetails: any[] = [];
+
+    if (detail.validationLayers) {
+      for (const layer of detail.validationLayers) {
+        if (layer.validationStatus === "Fail" || !layer.isValid) {
+          errorDetails.push({
+            errorCode: layer.errorCode,
+            errorMessage: layer.errorMessage,
+            suggestion: layer.suggestion,
+          });
+        } else if (
+          layer.validationStatus === "Warning" ||
+          layer.validationStatus === "WARNING"
+        ) {
+          warningDetails.push({
+            errorCode: layer.errorCode,
+            errorMessage: layer.errorMessage,
+            suggestion: layer.suggestion,
+          });
+        }
+      }
+    }
+
+    if (detail.riskChecks) {
+      const autoCheck = detail.riskChecks.find(
+        (rc: any) => rc.checkType === "AUTO_UPLOAD_VALIDATION",
+      );
+      if (autoCheck && autoCheck.checkDetails) {
+        try {
+          const details = JSON.parse(autoCheck.checkDetails);
+          if (details.ErrorDetails) {
+            details.ErrorDetails.forEach((err: any) => {
+              const code = err.ErrorCode || err.errorCode;
+              const msg = err.ErrorMessage || err.errorMessage;
+              if (!errorDetails.some((e) => e.errorCode === code)) {
+                errorDetails.push({
+                  errorCode: code,
+                  errorMessage: msg,
+                  suggestion: err.Suggestion || err.suggestion,
+                });
+              }
+            });
+          }
+          if (details.WarningDetails) {
+            details.WarningDetails.forEach((warn: any) => {
+              const code = warn.ErrorCode || warn.errorCode;
+              if (!warningDetails.some((w) => w.errorCode === code)) {
+                warningDetails.push({
+                  errorCode: code,
+                  errorMessage: warn.errorMessage || warn.errorMessage,
+                  suggestion: warn.suggestion || warn.suggestion,
+                });
+              }
+            });
+          }
+        } catch (e) {
+          console.error("Failed to parse riskCheck details", e);
+        }
+      }
+    }
+
+    if (
+      !isFailed &&
+      !warningDetails.some((w) => w.errorCode === "WARN_MISSING_XML_EVIDENCE")
+    ) {
+      warningDetails.push({
+        errorCode: "WARN_MISSING_XML_EVIDENCE",
+        errorMessage: "Hóa đơn xử lý qua OCR, không thể xác thực chữ ký số.",
+        suggestion:
+          "Nên đính kèm file XML gốc để hệ thống kiểm tra tính pháp lý.",
+      });
+    }
+
+    const ocrValidation: ValidationResultExtended = {
+      isValid: !isFailed,
+      errors: errorDetails.map((e) => e.errorMessage || ""),
+      warnings: warningDetails.map((w) => w.errorMessage || ""),
+      errorDetails,
+      warningDetails,
+      signerSubject: null,
+      extractedData:
+        detail.extractedData ||
+        ({
+          totalAmount: detail.totalAmount,
+          totalPreTax: detail.totalAmountBeforeTax,
+          totalTaxAmount: detail.totalTaxAmount,
+          lineItems: [],
+        } as any),
+      invoiceId: detail.invoiceId,
+    };
+
+    let finalErrorMessage = undefined;
+    if (isFailed) {
+      finalErrorMessage =
+        detail.notes || errorDetails[0]?.errorMessage || "OCR thất bại";
+    } else if (warningDetails.length > 0) {
+      finalErrorMessage = warningDetails[0]?.errorMessage || undefined;
+    }
+
+    setResults((prev) => {
+      const next = prev.map((item, idx) => {
+        if (idx !== i) return item;
+        return {
+          ...item,
+          status: isFailed ? "error" : hasWarnings ? "warning" : "success",
+          result: ocrValidation,
+          invoiceId: detail.invoiceId,
+          errorMessage: finalErrorMessage,
+          submitStatus: "idle",
+        } as ProcessResult;
+      });
+      setSelectedRowKeys(getDefaultSelected(next));
+      return next;
+    });
+  };
+
+  const handleProcessError = (i: number, error: any) => {
+    const resData = error.response?.data;
+    const errMsg =
+      resData?.errors?.join(", ") ||
+      resData?.message ||
+      error.message ||
+      "Lỗi hệ thống";
+    setResults((prev) =>
+      prev.map((item, idx) =>
+        idx === i
+          ? {
+              ...item,
+              status: "error",
+              result: resData,
+              errorMessage: errMsg,
+              submitStatus: "idle",
+            }
+          : item,
+      ),
+    );
+  };
+
+  // New function to resume polling if page is reloaded or navigated back
+  const resumePollingForInvoice = async (invoiceId: string, index: number) => {
+    try {
+      const detail = await invoiceService.pollInvoiceUntilDone(
+        invoiceId,
+        (status) => {
+          setResults((prev) =>
+            prev.map((item, idx) =>
+              idx === index && item.status === "processing"
+                ? {
+                    ...item,
+                    errorMessage:
+                      status === "Processing"
+                        ? "AI đang xử lý (Tiếp tục)..."
+                        : `Trạng thái: ${status}`,
+                  }
+                : item,
+            ),
+          );
+        },
+      );
+      updateResultWithDetail(index, detail);
+    } catch (error: any) {
+      handleProcessError(index, error);
+    }
+  };
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 💾 PERSISTENCE LOGIC: Save/Load from localStorage
+  // ════════════════════════════════════════════════════════════════════════
+
+  // Initial load from localStorage
+  useEffect(() => {
+    const savedResults = localStorage.getItem("smartinvoice_upload_batch");
+    const savedTab = localStorage.getItem("smartinvoice_upload_tab");
+
+    if (savedTab) {
+      setActiveTab(savedTab as "xml" | "ocr");
+    }
+
+    if (savedResults) {
+      try {
+        const parsed: ProcessResult[] = JSON.parse(savedResults);
+        if (parsed.length > 0) {
+          setResults(parsed);
+          setSelectedRowKeys(getDefaultSelected(parsed));
+          setCurrentStep(parsed.some(r => r.status === 'processing' || r.status === 'success' || r.status === 'warning') ? 2 : 0);
+          
+          // If any items are processing, they came from a previous session/mount.
+          // We need to restart polling for them.
+          parsed.forEach((item, index) => {
+            if (item.status === "processing" && item.invoiceId && item.processingMethod === "OCR") {
+              resumePollingForInvoice(item.invoiceId, index);
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Failed to load saved batch", e);
+      }
+    }
+  }, []);
+
+  // Save to localStorage whenever results or tab changes
+  useEffect(() => {
+    if (results.length > 0) {
+      localStorage.setItem("smartinvoice_upload_batch", JSON.stringify(results));
+    } else {
+      localStorage.removeItem("smartinvoice_upload_batch");
+    }
+  }, [results]);
+
+  useEffect(() => {
+    localStorage.setItem("smartinvoice_upload_tab", activeTab);
+  }, [activeTab]);
+
+  // OCR Review Modal State
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [reviewInvoiceId, setReviewInvoiceId] = useState<string | null>(null);
+
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
-  // Handle page reload/close/back button - warn when there are results that will be lost
+  // Handle page reload/close - warn ONLY when there are items ACTIVELY processing
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Warn if there are any results (danh sách sẽ mất)
-      if (results.length > 0) {
+      const hasActiveProcessing = results.some(r => r.status === 'processing');
+      if (hasActiveProcessing) {
         e.preventDefault();
-        e.returnValue = "";
+        e.returnValue = "Hệ thống đang xử lý hóa đơn, bạn có chắc muốn thoát?";
       }
     };
 
@@ -193,6 +417,7 @@ const UploadInvoice: React.FC = () => {
     setSelectedRowKeys([]);
   };
 
+
   const handleProcessFiles = async () => {
     if (fileList.length === 0) return;
 
@@ -209,68 +434,90 @@ const UploadInvoice: React.FC = () => {
     setResults(initialResults);
     setSelectedRowKeys([]);
 
-    try {
-      for (let i = 0; i < fileList.length; i++) {
-        const fileObj = fileList[i].originFileObj as File;
-        if (!fileObj) continue;
+    // Simple semaphore to limit concurrent uploads to 4
+    const uploadSemaphore = {
+      active: 0,
+      max: 4,
+      queue: [] as (() => void)[],
+      async acquire() {
+        if (this.active < this.max) {
+          this.active++;
+          return;
+        }
+        return new Promise<void>((resolve) => this.queue.push(resolve));
+      },
+      release() {
+        this.active--;
+        if (this.queue.length > 0) {
+          this.active++;
+          const next = this.queue.shift();
+          if (next) next();
+        }
+      },
+    };
 
+    // Internal function to process a single file
+    const processFile = async (i: number) => {
+      const fileObj = fileList[i].originFileObj as File;
+      if (!fileObj) return;
+
+      setResults((prev) =>
+        prev.map((item, idx) =>
+          idx === i ? { ...item, status: "processing" } : item,
+        ),
+      );
+
+      // Check if file type matches the current tab
+      const isXmlFile = fileObj.name.toLowerCase().endsWith(".xml");
+      const isPdfOrImage = [".pdf", ".jpg", ".jpeg", ".png"].some((ext) =>
+        fileObj.name.toLowerCase().endsWith(ext),
+      );
+
+      // Validation
+      if (activeTab === "xml" && !isXmlFile) {
         setResults((prev) =>
           prev.map((item, idx) =>
-            idx === i ? { ...item, status: "processing" } : item,
+            idx === i
+              ? {
+                  ...item,
+                  status: "error",
+                  errorMessage: "Chỉ chấp nhận file XML trong tab này.",
+                }
+              : item,
           ),
         );
+        return;
+      }
 
-        // Check if file type matches the current tab
-        const isXmlFile = fileObj.name.toLowerCase().endsWith(".xml");
-        const isPdfOrImage = [".pdf", ".jpg", ".jpeg", ".png"].some((ext) =>
-          fileObj.name.toLowerCase().endsWith(ext),
+      if (activeTab === "ocr" && !isPdfOrImage) {
+        setResults((prev) =>
+          prev.map((item, idx) =>
+            idx === i
+              ? {
+                  ...item,
+                  status: "error",
+                  errorMessage: "Chỉ chấp nhận file PDF, JPG, PNG trong tab này.",
+                }
+              : item,
+          ),
         );
+        return;
+      }
 
-        // If XML tab and file is not XML, skip
-        if (activeTab === "xml" && !isXmlFile) {
-          setResults((prev) =>
-            prev.map((item, idx) =>
-              idx === i
-                ? {
-                    ...item,
-                    status: "error",
-                    errorMessage:
-                      "Chỉ chấp nhận file XML trong tab này. Vui lòng chọn file XML.",
-                  }
-                : item,
-            ),
-          );
-          continue;
-        }
-
-        // If OCR tab and file is not PDF/Image, skip
-        if (activeTab === "ocr" && !isPdfOrImage) {
-          setResults((prev) =>
-            prev.map((item, idx) =>
-              idx === i
-                ? {
-                    ...item,
-                    status: "error",
-                    errorMessage:
-                      "Chỉ chấp nhận file PDF, JPG, PNG trong tab này.",
-                  }
-                : item,
-            ),
-          );
-          continue;
-        }
-
-        try {
-          if (activeTab === "xml") {
-            // ══════ XML TAB: Existing sync flow (unchanged) ══════
+      try {
+        if (activeTab === "xml") {
+          // ══════ XML TAB: Existing sync flow (Limited to 4 concurrent) ══════
+          await uploadSemaphore.acquire();
+          try {
             const { uploadUrl, s3Key } = await invoiceService.getUploadUrl(
               fileObj.name,
               fileObj.type || "application/xml",
             );
             await invoiceService.uploadToS3(uploadUrl, fileObj);
-            if (currentStep < 2) setCurrentStep(2);
-
+            
+            setCurrentStep((prev) => (prev < 2 ? 2 : prev));
             const validation = await invoiceService.processXml(s3Key);
+            
             const hasErrors = !!validation.errors?.length;
             const hasWarnings = !!validation.warnings?.length;
 
@@ -284,7 +531,7 @@ const UploadInvoice: React.FC = () => {
                   validation.errorDetails.length > 0
                 ) {
                   finalErrorMessage = validation.errorDetails
-                    .map((e) => e.errorMessage)
+                    .map((e: any) => e.errorMessage)
                     .join(" | ");
                 } else if (hasErrors) {
                   finalErrorMessage = validation.errors.join(" | ");
@@ -300,11 +547,7 @@ const UploadInvoice: React.FC = () => {
 
                 return {
                   ...item,
-                  status: hasErrors
-                    ? "error"
-                    : hasWarnings
-                      ? "warning"
-                      : "success",
+                  status: hasErrors ? "error" : hasWarnings ? "warning" : "success",
                   result: validation as ValidationResultExtended,
                   invoiceId: validation.invoiceId,
                   errorMessage: finalErrorMessage,
@@ -314,215 +557,64 @@ const UploadInvoice: React.FC = () => {
               setSelectedRowKeys(getDefaultSelected(next));
               return next;
             });
-          } else {
-            // ══════ OCR TAB: Async upload + polling flow ══════
-            // Step 1: Upload image → backend uploads to S3 + publishes SQS
-            const uploadResult = await invoiceService.uploadImage(fileObj);
-            if (currentStep < 2) setCurrentStep(2);
-
-            // Step 2: Poll until OCR worker finishes
-            setResults((prev) =>
-              prev.map((item, idx) =>
-                idx === i
-                  ? {
-                      ...item,
-                      status: "processing",
-                      invoiceId: uploadResult.invoiceId,
-                      errorMessage: "Đang chờ OCR xử lý...",
-                    }
-                  : item,
-              ),
-            );
-
-            const detail = await invoiceService.pollInvoiceUntilDone(
-              uploadResult.invoiceId,
-              (status) => {
-                // Update status text while polling
-                setResults((prev) =>
-                  prev.map((item, idx) =>
-                    idx === i && item.status === "processing"
-                      ? {
-                          ...item,
-                          errorMessage:
-                            status === "Processing"
-                              ? "Đang chờ OCR xử lý..."
-                              : `Trạng thái: ${status}`,
-                        }
-                      : item,
-                  ),
-                );
-              },
-            );
-
-            // Step 3: Map InvoiceDetailDto → ProcessResult
-            const isFailed =
-              detail.status === "Failed" || detail.status === "Rejected";
-            const hasWarnings =
-              detail.riskLevel === "Yellow" || detail.riskLevel === "Orange";
-
-            // Build validation-like result from detail
-            const warningDetails: Array<{
-              errorCode: string | null;
-              errorMessage: string | null;
-              suggestion: string | null;
-            }> = [];
-            const errorDetails: Array<{
-              errorCode: string | null;
-              errorMessage: string | null;
-              suggestion: string | null;
-            }> = [];
-
-            // Extract from validationLayers
-            if (detail.validationLayers) {
-              for (const layer of detail.validationLayers) {
-                if (layer.validationStatus === "Fail" || !layer.isValid) {
-                  errorDetails.push({
-                    errorCode: layer.errorCode,
-                    errorMessage: layer.errorMessage,
-                    suggestion: layer.suggestion,
-                  });
-                } else if (
-                  layer.validationStatus === "Warning" ||
-                  layer.validationStatus === "WARNING"
-                ) {
-                  warningDetails.push({
-                    errorCode: layer.errorCode,
-                    errorMessage: layer.errorMessage,
-                    suggestion: layer.suggestion,
-                  });
-                }
-              }
-            }
-
-            // Extract from riskChecks (specifically AUTO_UPLOAD_VALIDATION)
-            if (detail.riskChecks) {
-              const autoCheck = detail.riskChecks.find(
-                (rc: any) => rc.checkType === "AUTO_UPLOAD_VALIDATION",
-              );
-              if (autoCheck && autoCheck.checkDetails) {
-                try {
-                  const details = JSON.parse(autoCheck.checkDetails);
-                  if (details.ErrorDetails) {
-                    details.ErrorDetails.forEach((err: any) => {
-                      const code = err.ErrorCode || err.errorCode;
-                      const msg = err.ErrorMessage || err.errorMessage;
-                      const sugg = err.Suggestion || err.suggestion;
-
-                      if (!errorDetails.some((e) => e.errorCode === code)) {
-                        errorDetails.push({
-                          errorCode: code,
-                          errorMessage: msg,
-                          suggestion: sugg,
-                        });
-                      }
-                    });
-                  }
-                  if (details.WarningDetails) {
-                    details.WarningDetails.forEach((warn: any) => {
-                      if (
-                        !warningDetails.some(
-                          (w) => w.errorCode === warn.errorCode,
-                        )
-                      ) {
-                        warningDetails.push({
-                          errorCode: warn.errorCode || warn.errorCode,
-                          errorMessage: warn.errorMessage || warn.errorMessage,
-                          suggestion: warn.suggestion || warn.suggestion,
-                        });
-                      }
-                    });
-                  }
-                } catch (e) {
-                  console.error("Failed to parse riskCheck details", e);
-                }
-              }
-            }
-
-            // If OCR-only, add a default warning if nothing else
-            // Đối với luồng OCR, LUÔN LUÔN cảnh báo thiếu bằng chứng chữ ký số (trừ khi đã có)
-            if (
-              !isFailed &&
-              !warningDetails.some(
-                (w) => w.errorCode === "WARN_MISSING_XML_EVIDENCE",
-              )
-            ) {
-              warningDetails.push({
-                errorCode: "WARN_MISSING_XML_EVIDENCE",
-                errorMessage:
-                  "Hóa đơn xử lý qua OCR, không thể xác thực chữ ký số.",
-                suggestion:
-                  "Nên đính kèm file XML gốc để hệ thống kiểm tra tính pháp lý.",
-              });
-            }
-
-            const ocrValidation: ValidationResultExtended = {
-              isValid: !isFailed,
-              errors: errorDetails.map((e) => e.errorMessage || ""),
-              warnings: warningDetails.map((w) => w.errorMessage || ""),
-              errorDetails,
-              warningDetails,
-              signerSubject: null,
-              extractedData:
-                detail.extractedData ||
-                ({
-                  totalAmount: detail.totalAmount,
-                  totalPreTax: detail.totalAmountBeforeTax,
-                  totalTaxAmount: detail.totalTaxAmount,
-                } as any),
-              invoiceId: detail.invoiceId,
-            };
-
-            let finalErrorMessage = undefined;
-            if (isFailed) {
-              finalErrorMessage =
-                detail.notes || errorDetails[0]?.errorMessage || "OCR thất bại";
-            } else if (warningDetails.length > 0) {
-              finalErrorMessage = warningDetails[0]?.errorMessage || undefined;
-            }
-
-            const finalIdx = i;
-            setResults((prev) => {
-              const next = prev.map((item, idx) => {
-                if (idx !== finalIdx) return item;
-                return {
-                  ...item,
-                  status: isFailed
-                    ? "error"
-                    : hasWarnings
-                      ? "warning"
-                      : "success",
-                  result: ocrValidation,
-                  invoiceId: detail.invoiceId,
-                  errorMessage: finalErrorMessage,
-                  submitStatus: "idle",
-                } as ProcessResult;
-              });
-              setSelectedRowKeys(getDefaultSelected(next));
-              return next;
-            });
+          } finally {
+            uploadSemaphore.release();
           }
-        } catch (error: any) {
-          const resData = error.response?.data;
-          const errMsg =
-            resData?.errors?.join(", ") ||
-            resData?.message ||
-            error.message ||
-            "Lỗi hệ thống";
+        } else {
+          // ══════ OCR TAB: Async upload (Limited to 4) + delayed polling flow ══════
+          let uploadResult;
+          await uploadSemaphore.acquire();
+          try {
+            uploadResult = await invoiceService.uploadImage(fileObj);
+            setCurrentStep((prev) => (prev < 2 ? 2 : prev));
+          } finally {
+            uploadSemaphore.release();
+          }
+
           setResults((prev) =>
             prev.map((item, idx) =>
               idx === i
                 ? {
                     ...item,
-                    status: "error",
-                    result: resData,
-                    errorMessage: errMsg,
-                    submitStatus: "idle",
+                    status: "processing",
+                    invoiceId: uploadResult.invoiceId,
+                    errorMessage: "Đang chờ AI khởi động (15s)...",
                   }
                 : item,
             ),
           );
+
+          await new Promise((resolve) => setTimeout(resolve, 15000));
+
+          const detail = await invoiceService.pollInvoiceUntilDone(
+            uploadResult.invoiceId,
+            (status) => {
+              setResults((prev) =>
+                prev.map((item, idx) =>
+                  idx === i && item.status === "processing"
+                    ? {
+                        ...item,
+                        errorMessage:
+                          status === "Processing"
+                            ? "AI đang xử lý..."
+                            : `Trạng thái: ${status}`,
+                      }
+                    : item,
+                ),
+              );
+            },
+          );
+          updateResultWithDetail(i, detail);
         }
+      } catch (error: any) {
+        handleProcessError(i, error);
       }
+    };
+
+    try {
+      // Execute all file processing tasks in parallel
+      const tasks = fileList.map((_, i) => processFile(i));
+      await Promise.all(tasks);
       setCurrentStep(3);
     } catch (err) {
       message.error("Quá trình tổng thể gặp lỗi. Vui lòng thử lại.");

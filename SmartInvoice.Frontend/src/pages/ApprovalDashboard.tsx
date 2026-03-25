@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Card,
   Table,
@@ -23,7 +24,6 @@ import {
 import type { TabsProps } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoiceService } from "../services/invoice";
-import ApprovalDrawer from "../components/dashboard/ApprovalDrawer";
 
 const { Title, Text } = Typography;
 
@@ -34,9 +34,8 @@ const riskColors: Record<string, string> = {
 };
 
 const ApprovalDashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState("Pending");
-  const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
 
@@ -122,18 +121,16 @@ const ApprovalDashboard: React.FC = () => {
       id: i.invoiceId,
     })) || [];
 
-  const openDrawer = (record: any) => {
-    setSelectedInvoice(record);
-    setDrawerOpen(true);
-  };
-
   const columns = [
     {
       title: "Số hóa đơn",
       dataIndex: "invoiceNumber",
       key: "invoiceNumber",
       render: (text: string, record: any) => (
-        <a onClick={() => openDrawer(record)}>
+        <a onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/app/invoices/${record.invoiceId}`);
+        }}>
           <Text strong style={{ color: "#1a4b8c" }}>
             {text || record.invoiceNo}
           </Text>
@@ -226,7 +223,10 @@ const ApprovalDashboard: React.FC = () => {
           size="small"
           type="primary"
           ghost
-          onClick={() => openDrawer(record)}
+          onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/app/invoices/${record.invoiceId}`);
+          }}
         >
           Chi tiết
         </Button>
@@ -419,12 +419,6 @@ const ApprovalDashboard: React.FC = () => {
           pagination={{ pageSize: 15 }}
         />
       </Card>
-
-      <ApprovalDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        invoice={selectedInvoice}
-      />
     </div>
   );
 };

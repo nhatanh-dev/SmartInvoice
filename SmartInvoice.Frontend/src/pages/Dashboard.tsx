@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState } from 'react';
-import { Row, Col, Spin, Select } from 'antd';
+import { Row, Col, Spin, Select, Card } from 'antd';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import AnalyticsCharts from '@/components/dashboard/AnalyticsCharts';
 import { useQuery } from '@tanstack/react-query';
@@ -128,6 +128,47 @@ const Dashboard: React.FC = () => {
           size="middle"
         />
       </div>
+
+      <Row gutter={[24, 24]} className="mb-6">
+        <Col xs={24} md={8}>
+          <Card
+            className="rounded-[14px] shadow-dash border-none overflow-hidden relative"
+            styles={{ body: { padding: '24px', background: 'linear-gradient(135deg, #1a4b8c 0%, #2a6bbd 100%)', color: 'white' } }}
+          >
+            <div className="text-white/80 font-medium mb-2 text-sm uppercase tracking-wider">Tổng giá trị hóa đơn (Kỳ này)</div>
+            <div className="text-3xl font-bold text-white mb-1">
+              {stats?.totalAmount?.toLocaleString('vi-VN')} ₫
+            </div>
+            <FileTextOutlined className="absolute right-[-20px] bottom-[-20px] text-[100px] text-white/10" />
+          </Card>
+        </Col>
+        
+        <Col xs={24} md={8}>
+          <Card 
+            className="rounded-[14px] shadow-dash border-none overflow-hidden relative"
+            styles={{ body: { padding: '24px', background: 'linear-gradient(135deg, #2d9a5c 0%, #3bc175 100%)', color: 'white' } }}
+          >
+            <div className="text-white/80 font-medium mb-2 text-sm uppercase tracking-wider">Đã phê duyệt (Ghi nhận chi phí)</div>
+            <div className="text-3xl font-bold text-white mb-1">
+              {stats?.approvedAmount?.toLocaleString('vi-VN')} ₫
+            </div>
+            <CheckCircleOutlined className="absolute right-[-20px] bottom-[-20px] text-[100px] text-white/10" />
+          </Card>
+        </Col>
+
+        <Col xs={24} md={8}>
+          <Card 
+            className="rounded-[14px] shadow-dash border-none overflow-hidden relative"
+            styles={{ body: { padding: '24px', background: 'linear-gradient(135deg, #e6a817 0%, #facc32 100%)', color: 'white' } }}
+          >
+            <div className="text-white/80 font-medium mb-2 text-sm uppercase tracking-wider">Đang chờ duyệt</div>
+            <div className="text-3xl font-bold text-white mb-1">
+              {stats?.pendingAmount?.toLocaleString('vi-VN')} ₫
+            </div>
+            <WarningOutlined className="absolute right-[-20px] bottom-[-20px] text-[100px] text-white/10" />
+          </Card>
+        </Col>
+      </Row>
 
       {/* KPI Cards */}
       <Row gutter={[24, 24]} className="mb-8">
