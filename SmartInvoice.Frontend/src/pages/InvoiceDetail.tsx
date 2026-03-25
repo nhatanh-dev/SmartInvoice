@@ -340,7 +340,7 @@ const InvoiceDetail: React.FC = () => {
             boxShadow: "0 2px 8px rgba(72,128,255,0.35)",
           }}
         >
-          {isYellow ? "⚠️ Gửi duyệt + Giải trình" : "Gửi duyệt"}
+          {isYellow ? "Gửi duyệt + Giải trình" : "Gửi duyệt"}
         </Button>,
       );
     }
