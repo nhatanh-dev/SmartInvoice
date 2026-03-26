@@ -18,7 +18,7 @@ import {
   Table,
   Button,
   Space,
-  message,
+  App,
   Divider,
   Spin,
   Alert,
@@ -44,6 +44,7 @@ const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   onClose,
   onSaveSuccess,
 }) => {
+  const { message } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);

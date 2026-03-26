@@ -1,4 +1,4 @@
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, App as AntdApp } from 'antd';
 import viVN from 'antd/locale/vi_VN';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -33,51 +33,54 @@ const queryClient = new QueryClient();
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ConfigProvider theme={theme} locale={viVN}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            {/* Company Routes (Member & CompanyAdmin only) */}
-            <Route path="/app" element={<ProtectedRoute allowedRoles={['Member', 'CompanyAdmin']} />}>
-              <Route element={<AppLayout />}>
-                <Route index element={<Navigate to="/app/dashboard" replace />} />
-                <Route path="dashboard" element={<Dashboard />} />
-                <Route path="invoices" element={<InvoiceList />} />
-                <Route path="invoices/:id" element={<InvoiceDetail />} />
-                <Route path="upload" element={<UploadInvoice />} />
-                <Route path="validation" element={<ValidationPage />} />
-                <Route path="reports" element={<ReportsPage />} />
-                <Route path="profile" element={<Profile />} />
-                <Route path="subscription" element={<SubscriptionPage />} />
-                <Route path="payment/result" element={<PaymentResult />} />
-                <Route path="settings" element={<Settings />} />
+      <AntdApp>
+        <AuthProvider>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Routes>
+              {/* ... existing routes ... */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              {/* Company Routes (Member & CompanyAdmin only) */}
+              <Route path="/app" element={<ProtectedRoute allowedRoles={['Member', 'CompanyAdmin']} />}>
+                <Route element={<AppLayout />}>
+                  <Route index element={<Navigate to="/app/dashboard" replace />} />
+                  <Route path="dashboard" element={<Dashboard />} />
+                  <Route path="invoices" element={<InvoiceList />} />
+                  <Route path="invoices/:id" element={<InvoiceDetail />} />
+                  <Route path="upload" element={<UploadInvoice />} />
+                  <Route path="validation" element={<ValidationPage />} />
+                  <Route path="reports" element={<ReportsPage />} />
+                  <Route path="profile" element={<Profile />} />
+                  <Route path="subscription" element={<SubscriptionPage />} />
+                  <Route path="payment/result" element={<PaymentResult />} />
+                  <Route path="settings" element={<Settings />} />
 
-                {/* CompanyAdmin Only Routes */}
-                <Route element={<ProtectedRoute allowedRoles={['CompanyAdmin']} />}>
-                  <Route path="approval-dashboard" element={<ApprovalDashboard />} />
-                  <Route path="team" element={<TeamManagement />} />
-                  <Route path="audit-log" element={<AuditLogPage />} />
+                  {/* CompanyAdmin Only Routes */}
+                  <Route element={<ProtectedRoute allowedRoles={['CompanyAdmin']} />}>
+                    <Route path="approval-dashboard" element={<ApprovalDashboard />} />
+                    <Route path="team" element={<TeamManagement />} />
+                    <Route path="audit-log" element={<AuditLogPage />} />
+                  </Route>
                 </Route>
               </Route>
-            </Route>
 
-            {/* SuperAdmin Routes */}
-            <Route path="/admin" element={<ProtectedRoute allowedRoles={['SuperAdmin']} />}>
-              <Route element={<SuperAdminLayout />}>
-                <Route index element={<Navigate to="/admin/tenants" replace />} />
-                <Route path="tenants" element={<TenantManagement />} />
-                <Route path="global-blacklist" element={<GlobalBlacklist />} />
-                <Route path="system-config" element={<SystemConfig />} />
-                <Route path="settings" element={<Settings />} />
-                <Route path="profile" element={<Profile />} />
+              {/* SuperAdmin Routes */}
+              <Route path="/admin" element={<ProtectedRoute allowedRoles={['SuperAdmin']} />}>
+                <Route element={<SuperAdminLayout />}>
+                  <Route index element={<Navigate to="/admin/tenants" replace />} />
+                  <Route path="tenants" element={<TenantManagement />} />
+                  <Route path="global-blacklist" element={<GlobalBlacklist />} />
+                  <Route path="system-config" element={<SystemConfig />} />
+                  <Route path="settings" element={<Settings />} />
+                  <Route path="profile" element={<Profile />} />
+                </Route>
               </Route>
-            </Route>
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </AntdApp>
     </ConfigProvider>
   </QueryClientProvider>
 );

@@ -42,7 +42,7 @@ if (File.Exists(".env"))
 }
 
 // Load AWS Systems Manager Parameter Store
-builder.Configuration.AddSystemsManager("/SmartInvoice/prod/");
+builder.Configuration.AddSystemsManager("/SmartInvoice/dev/");
 
 // 1. Kết nối PostgreSQL
 var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
@@ -159,12 +159,11 @@ builder.Services.AddAWSService<IAmazonCognitoIdentityProvider>();
 builder.Services.AddAWSService<IAmazonSQS>();
 
 // ==================== SQS PUBLISHER & BACKGROUND CONSUMER ====================
-// Register SQS message publisher for VietQR validation requests
+// Register SQS message publisher for VietQR validation requests (Required by InvoiceService)
 builder.Services.AddScoped<ISqsMessagePublisher, SqsMessagePublisher>();
 
-// Register VietQR SQS Consumer as a hosted background service
-// This service continuously polls SQS for validation requests and updates invoices
-builder.Services.AddHostedService<VietQrSqsConsumerService>();
+// Register VietQR SQS Consumer as a hosted background service (Commented out to prevent OCR message theft)
+// builder.Services.AddHostedService<VietQrSqsConsumerService>();
 // ==================== END SQS CONFIGURATION ====================
 
 // ==================== OCR WORKER CONFIGURATION ====================
@@ -197,7 +196,7 @@ builder.Services.AddAuthentication(options =>
 .AddJwtBearer(options =>
 {
     options.Authority = authority;
-    
+
     // Explicitly set MetadataAddress to ensure .NET finds the AWS Cognito signing keys
     options.MetadataAddress = $"{authority}/.well-known/openid-configuration";
 
@@ -233,7 +232,7 @@ builder.Services.AddAuthorization(options =>
 
 
 // 6. Config CORS
-var allowedOrigins = builder.Configuration["ALLOWED_ORIGINS"]?.Split(',', StringSplitOptions.RemoveEmptyEntries) 
+var allowedOrigins = builder.Configuration["ALLOWED_ORIGINS"]?.Split(',', StringSplitOptions.RemoveEmptyEntries)
                    ?? new[] { "http://localhost:3000", "https://main.d3nvvjzg8ojoqd.amplifyapp.com" };
 
 builder.Services.AddCors(options =>

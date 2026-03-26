@@ -33,6 +33,7 @@ namespace SmartInvoice.API.Controller
         private readonly IAwsS3Service _s3Service;
         private readonly ISqsService _sqsService;
         private readonly IConfiguration _configuration;
+        private readonly ILogger<InvoicesController> _logger;
 
         [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
         public InvoicesController(
@@ -43,7 +44,8 @@ namespace SmartInvoice.API.Controller
             ISystemConfigProvider configProvider,
             IAwsS3Service s3Service,
             ISqsService sqsService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ILogger<InvoicesController> logger)
         {
             _storageService = storageService;
             _invoiceProcessor = invoiceProcessor;
@@ -53,6 +55,7 @@ namespace SmartInvoice.API.Controller
             _s3Service = s3Service;
             _sqsService = sqsService;
             _configuration = configuration;
+            _logger = logger;
         }
 
         // ════════════════════════════════════════════
@@ -153,22 +156,30 @@ namespace SmartInvoice.API.Controller
 
         [HttpGet("debug-config")]
         [AllowAnonymous]
-        public IActionResult DebugConfig()
+        public async Task<IActionResult> DebugConfig([FromServices] SmartInvoice.API.Repositories.Interfaces.IUnitOfWork unitOfWork)
         {
             var sqsUrl = _configuration["AWS_SQS_OCR_URL"];
             var ocrEndpoint = _configuration["OCR_API_ENDPOINT"];
-            var allowedOrigins = _configuration["ALLOWED_ORIGINS"];
-            var region = _configuration["AWS_REGION"] ?? _configuration["AWS_DEFAULT_REGION"];
+            
+            var allInvoices = await unitOfWork.Invoices.GetAllAsync();
+            var recentInvoices = allInvoices
+                .OrderByDescending(i => i.CreatedAt)
+                .Take(5)
+                .Select(i => new { 
+                    i.InvoiceId, 
+                    i.Status, 
+                    CreatedAt = i.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"), 
+                    OriginalFileName = i.RawData != null ? i.RawData.ObjectKey : "Unknown",
+                    Notes = i.Notes
+                })
+                .ToList();
 
             return Ok(new
             {
                 HasSqsUrl = !string.IsNullOrEmpty(sqsUrl),
-                SqsUrlMasked = string.IsNullOrEmpty(sqsUrl) ? "NULL" : sqsUrl[..Math.Min(20, sqsUrl.Length)] + "...",
-                HasOcrEndpoint = !string.IsNullOrEmpty(ocrEndpoint),
+                SqsUrl = sqsUrl,
                 OcrEndpoint = ocrEndpoint,
-                HasAllowedOrigins = !string.IsNullOrEmpty(allowedOrigins),
-                Region = region ?? "NOT_SET",
-                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                RecentInvoices = recentInvoices
             });
         }
 
@@ -229,6 +240,7 @@ namespace SmartInvoice.API.Controller
 
                 // ── 3. Publish OCR job to SQS ──
                 var ocrQueueUrl = _configuration["AWS_SQS_OCR_URL"];
+                _logger.LogInformation(">>> [UPLOAD_API] Sending OCR message to Queue: {QueueUrl}", ocrQueueUrl);
                 if (!string.IsNullOrEmpty(ocrQueueUrl))
                 {
                     await _sqsService.SendMessageAsync(new OcrJobMessage
