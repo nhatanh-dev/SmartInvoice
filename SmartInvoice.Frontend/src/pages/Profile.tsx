@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-    Card, Typography, Tag, Tabs, message, Alert, Spin, Descriptions
+    Card, Typography, Tag, Tabs, App, Alert, Spin, Descriptions
 } from 'antd';
 import {
     UserOutlined, IdcardOutlined, SafetyCertificateOutlined, CodeSandboxOutlined
@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 const { Title, Text } = Typography;
 
 const Profile: React.FC = () => {
+    const { message } = App.useApp();
     const { user, checkAuth } = useAuth();
     const [profile, setProfile] = useState<UserProfileDto | null>(null);
     const [loading, setLoading] = useState(true);

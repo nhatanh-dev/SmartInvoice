@@ -12,7 +12,7 @@ import {
   Input,
   InputNumber,
   Switch,
-  message,
+  App,
   Popconfirm,
   Descriptions,
   Tooltip,
@@ -43,6 +43,7 @@ import {
 const { Title, Text } = Typography;
 
 const SystemConfig: React.FC = () => {
+  const { message } = App.useApp();
   const [activeTab, setActiveTab] = useState("packages");
   const queryClient = useQueryClient();
 
@@ -311,7 +312,7 @@ const SystemConfig: React.FC = () => {
                           </Space>
                         }
                         size="small"
-                        bordered
+                        variant="outlined"
                         style={{ borderRadius: 8 }}
                       >
                         <Descriptions column={1} size="small" bordered>
@@ -424,7 +425,7 @@ const SystemConfig: React.FC = () => {
         confirmLoading={
           createPackageMutation.isPending || updatePackageMutation.isPending
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={packageForm}
@@ -489,7 +490,7 @@ const SystemConfig: React.FC = () => {
             />
           </Form.Item>
 
-          <Divider orientation={"left" as any} style={{ margin: "12px 0" }}>
+          <Divider titlePlacement="left" style={{ margin: "12px 0" }}>
             Giá cước (VND)
           </Divider>
           <div
@@ -525,7 +526,7 @@ const SystemConfig: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Divider orientation={"left" as any} style={{ margin: "12px 0" }}>
+          <Divider titlePlacement="left" style={{ margin: "12px 0" }}>
             Hạn mức (Quotas)
           </Divider>
           <div
@@ -549,7 +550,7 @@ const SystemConfig: React.FC = () => {
             </Form.Item>
           </div>
 
-          <Divider orientation={"left" as any} style={{ margin: "12px 0" }}>
+          <Divider titlePlacement="left" style={{ margin: "12px 0" }}>
             Tính năng (Features)
           </Divider>
           <div

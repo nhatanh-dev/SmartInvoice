@@ -17,7 +17,7 @@ const RiskDistributionCard: React.FC<RiskDistributionCardProps> = ({ data }) => 
 
     return (
         <Card
-            bordered={false}
+            variant="borderless"
             className="bg-dash-card rounded-[14px] shadow-dash h-full"
             styles={{ body: { padding: '24px' } }}
         >

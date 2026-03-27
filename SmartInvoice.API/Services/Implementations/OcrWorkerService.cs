@@ -24,10 +24,10 @@ public class OcrWorkerService : BackgroundService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OcrWorkerService> _logger;
-    private readonly SemaphoreSlim _concurrencySemaphore = new(2, 2); 
+    private readonly SemaphoreSlim _concurrencySemaphore = new(1, 1); // Sequential: 1 at a time to match single-worker OCR Python server
     private string? _queueUrl;
     private const int WaitTimeSeconds = 20;
-    private const int MaxNumberOfMessages = 2; // Reduced to 2 to match concurrency and allow SQS scaling to detect backlog
+    private const int MaxNumberOfMessages = 1; // Sequential: 1 message per poll to avoid GIL contention & Gemini 429
 
     public OcrWorkerService(
         IServiceScopeFactory scopeFactory,
@@ -47,14 +47,15 @@ public class OcrWorkerService : BackgroundService
 
         try
         {
+            _logger.LogInformation(">>> [OCR_WORKER] Attempting to find SQS URL in configuration...");
             _queueUrl = _configuration["AWS_SQS_OCR_URL"];
             if (string.IsNullOrEmpty(_queueUrl))
             {
-                _logger.LogWarning("⚠️ AWS_SQS_OCR_URL not configured — OcrWorkerService is DISABLED.");
+                _logger.LogWarning("❌ [OCR_WORKER] AWS_SQS_OCR_URL not configured! OcrWorkerService is DISABLED.");
                 return;
             }
 
-            _logger.LogInformation("OCR Worker configured. Queue URL: {QueueUrl}", _queueUrl);
+            _logger.LogInformation("✅ [OCR_WORKER] Configured. Queue URL: {QueueUrl}", _queueUrl);
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -62,9 +63,9 @@ public class OcrWorkerService : BackgroundService
                 {
                     await PollAndProcessAsync(stoppingToken);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
-                    _logger.LogInformation("OCR Worker polling canceled.");
+                    _logger.LogInformation("OCR Worker polling canceled due to application shutdown.");
                     break;
                 }
                 catch (Exception ex)
@@ -87,9 +88,10 @@ public class OcrWorkerService : BackgroundService
 
     private async Task PollAndProcessAsync(CancellationToken ct)
     {
-        // 300s timeout (increased from 180s for batch processing stability)
+        _logger.LogInformation(">>> [OCR_WORKER] Checking for messages in SQS URL: {QueueUrl}", _queueUrl);
+        // 600s timeout per polling/processing cycle to ensure batch completion
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(300));
+        cts.CancelAfter(TimeSpan.FromSeconds(600));
 
         using var scope = _scopeFactory.CreateScope();
         var sqsService = scope.ServiceProvider.GetRequiredService<ISqsService>();
@@ -98,19 +100,20 @@ public class OcrWorkerService : BackgroundService
 
         if (messages.Count == 0)
         {
-            _logger.LogDebug("No OCR jobs in queue (long poll timeout).");
+            _logger.LogInformation(">>> [OCR_WORKER] No OCR jobs in queue (long poll timeout).");
             return;
         }
 
-        _logger.LogInformation("Received {Count} OCR job(s) from SQS. Processing in parallel...", messages.Count);
+        _logger.LogInformation("Received {Count} OCR job(s) from SQS. Processing sequentially...", messages.Count);
 
-        var tasks = messages.Select(async message =>
+        foreach (var message in messages)
         {
+            _logger.LogInformation("Starting sequential processing for MessageId={MessageId}", message.MessageId);
+
             await _concurrencySemaphore.WaitAsync(ct);
             try
             {
-                // Process each message in its own parallel task (limited by semaphore)
-                await ProcessSingleJobAsync(message.Body, ct);
+                await ProcessSingleJobAsync(message.Body, cts.Token);
 
                 // Delete message after successful processing
                 await sqsService.DeleteMessageAsync(_queueUrl!, message.ReceiptHandle, ct);
@@ -122,6 +125,11 @@ public class OcrWorkerService : BackgroundService
                 _logger.LogError(ex, "Invalid OCR job message format. Deleting poison message {MessageId}.", message.MessageId);
                 await sqsService.DeleteMessageAsync(_queueUrl!, message.ReceiptHandle, ct);
             }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                _logger.LogWarning("OCR job {MessageId} timed out after 600s. Message will be retried.", message.MessageId);
+                // Don't delete — let SQS retry after visibility timeout
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing OCR job {MessageId}. Message will be retried after visibility timeout.", message.MessageId);
@@ -131,9 +139,7 @@ public class OcrWorkerService : BackgroundService
             {
                 _concurrencySemaphore.Release();
             }
-        });
-
-        await Task.WhenAll(tasks);
+        }
     }
 
     private async Task ProcessSingleJobAsync(string messageBody, CancellationToken ct)
@@ -163,6 +169,8 @@ public class OcrWorkerService : BackgroundService
 
         try
         {
+            _logger.LogInformation("[OCR_WORKER STEP 0/7] 🛠️ Scope initialized for InvoiceId={InvoiceId}", job.InvoiceId);
+
             // ══════════════════════════════════════════════════
             // STEP 1/7: Download image from S3
             // ══════════════════════════════════════════════════
@@ -181,341 +189,360 @@ public class OcrWorkerService : BackgroundService
                 throw; // Re-throw so SQS retries
             }
 
-        // ══════════════════════════════════════════════════
-        // STEP 2/7: Call Python OCR API
-        // ══════════════════════════════════════════════════
-        _logger.LogInformation("[OCR_WORKER STEP 2/7] 🧠 Calling OCR API...");
-        OcrApiResponse? ocrResponse;
-        try
-        {
-            ocrResponse = await CallOcrApiAsync(imageBytes, job.FileName, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[OCR_WORKER STEP 2/7] ❌ OCR API call failed.");
-            await UpdateInvoiceStatus(unitOfWork, job.InvoiceId, "Failed", "Red",
-                $"OCR API lỗi: {ex.Message}");
-            throw;
-        }
-
-        if (ocrResponse == null || !ocrResponse.Success || ocrResponse.Data == null)
-        {
-            var errorMsg = ocrResponse?.Error ?? "Unknown OCR error";
-            _logger.LogWarning("[OCR_WORKER STEP 2/7] ❌ OCR returned failure: {Error}", errorMsg);
-            await UpdateInvoiceStatus(unitOfWork, job.InvoiceId, "Failed", "Red",
-                $"OCR trích xuất thất bại: {errorMsg}");
-            return; // Permanent failure → message will be deleted
-        }
-
-        _logger.LogInformation("[OCR_WORKER STEP 2/7] ✅ OCR succeeded in {LatencyMs}ms.", ocrResponse.LatencyMs);
-        var ocrResult = ocrResponse.Data;
-
-        // ══════════════════════════════════════════════════
-        // STEP 3/7: Validate Business Logic (duplicate, owner, etc.)
-        // ══════════════════════════════════════════════════
-        _logger.LogInformation("[OCR_WORKER STEP 3/7] 🔍 Validating OCR business logic...");
-        var swLogic = System.Diagnostics.Stopwatch.StartNew();
-        var logicResult = await invoiceProcessor.ValidateOcrBusinessLogicAsync(ocrResult, job.CompanyId, ct);
-        swLogic.Stop();
-
-        _logger.LogInformation("[OCR_WORKER STEP 3/7] ✅ Business logic validation completed ({DurationMs}ms)", swLogic.ElapsedMilliseconds);
-        _logger.LogInformation("   └─ IsValid: {IsValid}, Errors: {ErrorCount}, Warnings: {WarningCount}",
-            logicResult.IsValid,
-            logicResult.ErrorDetails?.Count ?? 0,
-            logicResult.WarningDetails?.Count ?? 0);
-
-        // Collect all errors/warnings
-        var finalErrors = new List<ValidationErrorDetail>();
-        var finalWarnings = new List<ValidationErrorDetail>();
-        finalErrors.AddRange(logicResult.ErrorDetails ?? new List<ValidationErrorDetail>());
-        finalWarnings.AddRange(logicResult.WarningDetails ?? new List<ValidationErrorDetail>());
-
-        // Check for fatal errors (duplicate / not owner)
-        // Dừng và xóa Draft Invoice nếu lỗi nghiêm trọng (giống luồng XML) để tránh lưu dữ liệu rác
-        var fatalErrorCodes = new HashSet<string> { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected, ErrorCodes.LogicOwner };
-        var hasFatalError = finalErrors.Any(e =>
-            !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode));
-
-        if (hasFatalError)
-        {
-            var fatalErr = finalErrors.First(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!));
-            _logger.LogWarning("[OCR_WORKER STEP 3/7] ⚠️ FATAL ERROR detected — deleting draft invoice and aborting to prevent junk data.");
-            _logger.LogWarning("   └─ {ErrorCode}: {ErrorMessage}", fatalErr.ErrorCode, fatalErr.ErrorMessage);
-
-            var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
-            if (draftInvoice != null)
+            // ══════════════════════════════════════════════════
+            // STEP 2/7: Call Python OCR API
+            // ══════════════════════════════════════════════════
+            _logger.LogInformation("[OCR_WORKER STEP 2/7] 🧠 Calling OCR API...");
+            OcrApiResponse? ocrResponse;
+            try
             {
-                unitOfWork.Invoices.Remove(draftInvoice);
-                await unitOfWork.CompleteAsync();
-                _logger.LogInformation("Deleted draft invoice {InvoiceId} due to fatal error.", job.InvoiceId);
+                ocrResponse = await CallOcrApiAsync(imageBytes, job.FileName, ct);
             }
-            return;
-        }
-
-        // ══════════════════════════════════════════════════
-        // STEP 4/7: Extract OCR data → InvoiceExtractedData
-        // ══════════════════════════════════════════════════
-        _logger.LogInformation("[OCR_WORKER STEP 4/7] 🧠 Extracting invoice data from OCR result...");
-        var extractedData = invoiceProcessor.ExtractOcrData(ocrResult);
-
-        _logger.LogInformation("[OCR_WORKER STEP 4/7] ✅ Extracted: Seller={Seller}, Buyer={Buyer}, Amount={Amount}",
-            extractedData?.SellerName ?? "N/A",
-            extractedData?.BuyerName ?? "N/A",
-            extractedData?.TotalAmount ?? 0);
-
-        // ══════════════════════════════════════════════════
-        // STEP 5/7: Create FileStorage record for the visual file
-        // ══════════════════════════════════════════════════
-        _logger.LogInformation("[OCR_WORKER STEP 5/7] 💾 Creating FileStorage record...");
-        Guid? visualFileId = null;
-        if (!string.IsNullOrEmpty(job.S3Key))
-        {
-            // Check if FileStorage already exists for this S3Key
-            var existingFile = await unitOfWork.FileStorages.FindByS3KeyAsync(job.S3Key);
-            if (existingFile != null)
+            catch (Exception ex)
             {
-                visualFileId = existingFile.FileId;
-                _logger.LogInformation("   └─ ℹ️  FileStorage already exists: {FileId}", visualFileId);
+                _logger.LogError(ex, "[OCR_WORKER STEP 2/7] ❌ OCR API call failed.");
+                await UpdateInvoiceStatus(unitOfWork, job.InvoiceId, "Failed", "Red",
+                    $"OCR API lỗi: {ex.Message}");
+                throw;
+            }
+
+            if (ocrResponse == null || !ocrResponse.Success || ocrResponse.Data == null)
+            {
+                var errorMsg = ocrResponse?.Error ?? "Unknown OCR error";
+                _logger.LogWarning("[OCR_WORKER STEP 2/7] ❌ OCR returned failure: {Error}", errorMsg);
+                await UpdateInvoiceStatus(unitOfWork, job.InvoiceId, "Failed", "Red",
+                    $"OCR trích xuất thất bại: {errorMsg}");
+                return; // Permanent failure → message will be deleted
+            }
+
+            _logger.LogInformation("[OCR_WORKER STEP 2/7] ✅ OCR succeeded in {LatencyMs}ms.", ocrResponse.LatencyMs);
+            var ocrResult = ocrResponse.Data;
+
+            // ══════════════════════════════════════════════════
+            // STEP 3/7: Validate Business Logic (duplicate, owner, etc.)
+            // ══════════════════════════════════════════════════
+            _logger.LogInformation("[OCR_WORKER STEP 3/7] 🔍 Validating OCR business logic...");
+            var swLogic = System.Diagnostics.Stopwatch.StartNew();
+            var logicResult = await invoiceProcessor.ValidateOcrBusinessLogicAsync(ocrResult, job.CompanyId, ct);
+            swLogic.Stop();
+
+            _logger.LogInformation("[OCR_WORKER STEP 3/7] ✅ Business logic validation completed ({DurationMs}ms)", swLogic.ElapsedMilliseconds);
+            _logger.LogInformation("   └─ IsValid: {IsValid}, Errors: {ErrorCount}, Warnings: {WarningCount}",
+                logicResult.IsValid,
+                logicResult.ErrorDetails?.Count ?? 0,
+                logicResult.WarningDetails?.Count ?? 0);
+
+            // Collect all errors/warnings
+            var finalErrors = new List<ValidationErrorDetail>();
+            var finalWarnings = new List<ValidationErrorDetail>();
+            finalErrors.AddRange(logicResult.ErrorDetails ?? new List<ValidationErrorDetail>());
+            finalWarnings.AddRange(logicResult.WarningDetails ?? new List<ValidationErrorDetail>());
+
+            // Check for fatal errors (duplicate / not owner)
+            // Dừng và xóa Draft Invoice nếu lỗi nghiêm trọng (giống luồng XML) để tránh lưu dữ liệu rác
+            var fatalErrorCodes = new HashSet<string> { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected, ErrorCodes.LogicOwner };
+            var hasFatalError = finalErrors.Any(e =>
+                !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode));
+
+            if (hasFatalError)
+            {
+                var fatalErr = finalErrors.First(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!));
+                _logger.LogWarning("[OCR_WORKER STEP 3/7] ⚠️ FATAL ERROR detected — deleting draft invoice and aborting to prevent junk data.");
+                _logger.LogWarning("   └─ {ErrorCode}: {ErrorMessage}", fatalErr.ErrorCode, fatalErr.ErrorMessage);
+
+                var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
+                if (draftInvoice != null)
+                {
+                    unitOfWork.Invoices.Remove(draftInvoice);
+                    await unitOfWork.CompleteAsync();
+                    _logger.LogInformation("Deleted draft invoice {InvoiceId} due to fatal error.", job.InvoiceId);
+                }
+                return;
+            }
+
+            // ══════════════════════════════════════════════════
+            // STEP 4/7: Extract OCR data → InvoiceExtractedData
+            // ══════════════════════════════════════════════════
+            _logger.LogInformation("[OCR_WORKER STEP 4/7] 🧠 Extracting invoice data from OCR result...");
+            var extractedData = invoiceProcessor.ExtractOcrData(ocrResult);
+
+            _logger.LogInformation("[OCR_WORKER STEP 4/7] ✅ Extracted: Seller={Seller}, Buyer={Buyer}, Amount={Amount}",
+                extractedData?.SellerName ?? "N/A",
+                extractedData?.BuyerName ?? "N/A",
+                extractedData?.TotalAmount ?? 0);
+
+            // ══════════════════════════════════════════════════
+            // STEP 5/7: Create FileStorage record for the visual file
+            // ══════════════════════════════════════════════════
+            _logger.LogInformation("[OCR_WORKER STEP 5/7] 💾 Creating FileStorage record...");
+            Guid? visualFileId = null;
+            if (!string.IsNullOrEmpty(job.S3Key))
+            {
+                // Check if FileStorage already exists for this S3Key
+                var existingFile = await unitOfWork.FileStorages.FindByS3KeyAsync(job.S3Key);
+                if (existingFile != null)
+                {
+                    visualFileId = existingFile.FileId;
+                    _logger.LogInformation("   └─ ℹ️  FileStorage already exists: {FileId}", visualFileId);
+                }
+                else
+                {
+                    var bucketName = Environment.GetEnvironmentVariable("AWS_BUCKET_NAME")
+                                     ?? _configuration["AWS:BucketName"]
+                                     ?? "smartinvoice-storage-team-dat";
+
+                    var ext = Path.GetExtension(job.FileName).ToLowerInvariant();
+                    var mimeType = ext switch
+                    {
+                        ".png" => "image/png",
+                        ".jpg" or ".jpeg" => "image/jpeg",
+                        ".pdf" => "application/pdf",
+                        ".tiff" or ".tif" => "image/tiff",
+                        _ => "application/octet-stream"
+                    };
+
+                    var fileStorage = new FileStorage
+                    {
+                        FileId = Guid.NewGuid(),
+                        CompanyId = job.CompanyId,
+                        UploadedBy = job.UserId,
+                        OriginalFileName = Path.GetFileName(job.FileName),
+                        FileExtension = ext,
+                        FileSize = imageBytes.Length,
+                        MimeType = mimeType,
+                        S3BucketName = bucketName,
+                        S3Key = job.S3Key,
+                        IsProcessed = true,
+                        ProcessedAt = DateTime.UtcNow
+                    };
+
+                    visualFileId = fileStorage.FileId;
+                    await unitOfWork.FileStorages.AddAsync(fileStorage);
+                    _logger.LogInformation("   └─ ✅ FileStorage created: {FileId}", visualFileId);
+                }
+            }
+
+            // ══════════════════════════════════════════════════
+            // STEP 6/7: Update Invoice in DB
+            // ══════════════════════════════════════════════════
+            _logger.LogInformation("[OCR_WORKER STEP 6/7] 📝 Updating invoice record...");
+
+            var invoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
+            if (invoice == null)
+            {
+                _logger.LogWarning("[OCR_WORKER STEP 6/7] ⚠️ Invoice {InvoiceId} not found in DB. Skipping.", job.InvoiceId);
+                return;
+            }
+
+            var isCompletelyValid = !finalErrors.Any();
+
+            // Add WARN_MISSING_XML_EVIDENCE for OCR-only uploads (only if no fatal errors)
+            if (isCompletelyValid)
+            {
+                finalWarnings.Add(new ValidationErrorDetail
+                {
+                    ErrorCode = "WARN_MISSING_XML_EVIDENCE",
+                    ErrorMessage = "Hóa đơn được trích xuất từ ảnh/PDF bằng AI. Để đảm bảo 100% tính pháp lý khi khai thuế, bạn cần bổ sung file XML gốc.",
+                    Suggestion = "Tải lên file XML gốc của hóa đơn này để hệ thống xác thực chữ ký số và cập nhật dữ liệu chính xác."
+                });
+            }
+
+            // ── Update invoice fields ──
+            // Use hasFatalError for strict Rejection; isCompletelyValid for normal errors
+            invoice.Status = hasFatalError ? "Rejected" : "Draft";
+            invoice.RiskLevel = hasFatalError ? "Red" : "Yellow"; // Always Yellow if no XML, unless fatal
+            invoice.ProcessingMethod = "API";
+            invoice.ExtractedData = extractedData;
+            invoice.VisualFileId = visualFileId;
+            invoice.Notes = hasFatalError
+                ? finalErrors.FirstOrDefault(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!))?.ErrorMessage ?? "Hóa đơn có lỗi nghiêm trọng."
+                : (isCompletelyValid ? "Hóa đơn từ OCR, cần bổ sung file XML gốc để xác thực pháp lý." : "Hóa đơn có lỗi, cần kiểm tra lại.");
+
+            string? Trunc(string? val, int max) => val?.Length > max ? val[..max] : val;
+
+            // Map key fields
+            invoice.InvoiceNumber = Trunc(extractedData?.InvoiceNumber, 50) ?? "UNKNOWN";
+            invoice.FormNumber = Trunc(extractedData?.InvoiceTemplateCode, 20);
+            invoice.SerialNumber = Trunc(extractedData?.InvoiceSymbol, 50);
+            invoice.InvoiceCurrency = Trunc(extractedData?.InvoiceCurrency, 3) ?? "VND";
+            invoice.ExchangeRate = extractedData?.ExchangeRate ?? 1;
+            invoice.TotalAmountBeforeTax = extractedData?.TotalPreTax;
+            invoice.TotalTaxAmount = extractedData?.TotalTaxAmount;
+            invoice.TotalAmount = extractedData?.TotalAmount ?? 0;
+            invoice.TotalAmountInWords = extractedData?.TotalAmountInWords;
+            invoice.PaymentMethod = Trunc(extractedData?.PaymentTerms, 100);
+            invoice.MCCQT = Trunc(extractedData?.MCCQT, 50);
+
+            if (extractedData?.InvoiceDate != null)
+                invoice.InvoiceDate = DateTime.SpecifyKind(extractedData.InvoiceDate.Value, DateTimeKind.Utc);
+
+            if (invoice.Seller == null) invoice.Seller = new SellerInfo();
+            invoice.Seller.Name = Trunc(extractedData?.SellerName, 200);
+            invoice.Seller.TaxCode = Trunc(extractedData?.SellerTaxCode, 14);
+            invoice.Seller.Address = extractedData?.SellerAddress;
+            invoice.Seller.Phone = Trunc(extractedData?.SellerPhone, 20);
+            invoice.Seller.Email = Trunc(extractedData?.SellerEmail, 100);
+            invoice.Seller.BankAccount = Trunc(extractedData?.SellerBankAccount, 50);
+            invoice.Seller.BankName = Trunc(extractedData?.SellerBankName, 200);
+
+            if (invoice.Buyer == null) invoice.Buyer = new BuyerInfo();
+            invoice.Buyer.Name = Trunc(extractedData?.BuyerName, 200);
+            invoice.Buyer.TaxCode = Trunc(extractedData?.BuyerTaxCode, 14);
+            invoice.Buyer.Address = extractedData?.BuyerAddress;
+            invoice.Buyer.Phone = Trunc(extractedData?.BuyerPhone, 20);
+            invoice.Buyer.Email = Trunc(extractedData?.BuyerEmail, 100);
+            invoice.Buyer.ContactPerson = Trunc(extractedData?.BuyerContactPerson, 100);
+
+            // ── Determine document type ──
+            var docTypes = await unitOfWork.DocumentTypes.GetAllAsync();
+            var typeStr = ocrResult.Invoice?.Type?.Value?.ToUpper();
+            if (typeStr != null && typeStr.Contains("BÁN HÀNG"))
+            {
+                var saleType = docTypes.FirstOrDefault(d => d.TypeCode == "SALE" || d.FormTemplate == "02GTTT");
+                invoice.DocumentTypeId = saleType?.DocumentTypeId ?? 2;
             }
             else
             {
-                var bucketName = Environment.GetEnvironmentVariable("AWS_BUCKET_NAME")
-                                 ?? _configuration["AWS:BucketName"]
-                                 ?? "smartinvoice-storage-team-dat";
-
-                var ext = Path.GetExtension(job.FileName).ToLowerInvariant();
-                var mimeType = ext switch
-                {
-                    ".png" => "image/png",
-                    ".jpg" or ".jpeg" => "image/jpeg",
-                    ".pdf" => "application/pdf",
-                    ".tiff" or ".tif" => "image/tiff",
-                    _ => "application/octet-stream"
-                };
-
-                var fileStorage = new FileStorage
-                {
-                    FileId = Guid.NewGuid(),
-                    CompanyId = job.CompanyId,
-                    UploadedBy = job.UserId,
-                    OriginalFileName = Path.GetFileName(job.FileName),
-                    FileExtension = ext,
-                    FileSize = imageBytes.Length,
-                    MimeType = mimeType,
-                    S3BucketName = bucketName,
-                    S3Key = job.S3Key,
-                    IsProcessed = true,
-                    ProcessedAt = DateTime.UtcNow
-                };
-
-                visualFileId = fileStorage.FileId;
-                await unitOfWork.FileStorages.AddAsync(fileStorage);
-                _logger.LogInformation("   └─ ✅ FileStorage created: {FileId}", visualFileId);
+                var gtgtType = docTypes.FirstOrDefault(d => d.TypeCode == "GTGT" || d.FormTemplate == "01GTKT");
+                invoice.DocumentTypeId = gtgtType?.DocumentTypeId ?? 1;
             }
-        }
 
-        // ══════════════════════════════════════════════════
-        // STEP 6/7: Update Invoice in DB
-        // ══════════════════════════════════════════════════
-        _logger.LogInformation("[OCR_WORKER STEP 6/7] 📝 Updating invoice record...");
+            // ── Business Logic CheckResult ──
+            var logicErrInfo = (logicResult.ErrorDetails ?? Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault()
+                            ?? (logicResult.WarningDetails ?? Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault();
 
-        var invoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
-        if (invoice == null)
-        {
-            _logger.LogWarning("[OCR_WORKER STEP 6/7] ⚠️ Invoice {InvoiceId} not found in DB. Skipping.", job.InvoiceId);
-            return;
-        }
+            string GetLayerStatus(bool valid, List<ValidationErrorDetail>? warnings) =>
+                !valid ? "Fail" : (warnings != null && warnings.Any()) ? "Warning" : "Pass";
 
-        var isCompletelyValid = !finalErrors.Any();
-
-        // Add WARN_MISSING_XML_EVIDENCE for OCR-only uploads (only if no fatal errors)
-        if (isCompletelyValid)
-        {
-            finalWarnings.Add(new ValidationErrorDetail
+            await unitOfWork.InvoiceCheckResults.AddAsync(new InvoiceCheckResult
             {
-                ErrorCode = "WARN_MISSING_XML_EVIDENCE",
-                ErrorMessage = "Hóa đơn được trích xuất từ ảnh/PDF bằng AI. Để đảm bảo 100% tính pháp lý khi khai thuế, bạn cần bổ sung file XML gốc.",
-                Suggestion = "Tải lên file XML gốc của hóa đơn này để hệ thống xác thực chữ ký số và cập nhật dữ liệu chính xác."
+                CheckId = Guid.NewGuid(),
+                InvoiceId = job.InvoiceId,
+                Category = "BUSINESS_LOGIC",
+                CheckName = "BusinessLogic",
+                CheckOrder = 3,
+                IsValid = logicResult.IsValid,
+                Status = GetLayerStatus(logicResult.IsValid, logicResult.WarningDetails),
+                ErrorCode = logicErrInfo?.ErrorCode,
+                ErrorMessage = logicErrInfo?.ErrorMessage,
+                Suggestion = logicErrInfo?.Suggestion,
+                DurationMs = (int)swLogic.ElapsedMilliseconds
             });
-        }
 
-        // ── Update invoice fields ──
-        // Use hasFatalError for strict Rejection; isCompletelyValid for normal errors
-        invoice.Status = hasFatalError ? "Rejected" : "Draft";
-        invoice.RiskLevel = hasFatalError ? "Red" : "Yellow"; // Always Yellow if no XML, unless fatal
-        invoice.ProcessingMethod = "API";
-        invoice.ExtractedData = extractedData;
-        invoice.VisualFileId = visualFileId;
-        invoice.Notes = hasFatalError
-            ? finalErrors.FirstOrDefault(e => !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!))?.ErrorMessage ?? "Hóa đơn có lỗi nghiêm trọng."
-            : (isCompletelyValid ? "Hóa đơn từ OCR, cần bổ sung file XML gốc để xác thực pháp lý." : "Hóa đơn có lỗi, cần kiểm tra lại.");
+            // ── AUTO_UPLOAD_VALIDATION CheckResult ──
+            var checkStatus = isCompletelyValid ? (finalWarnings.Any() ? "WARNING" : "PASS") : "FAIL";
+            var priorityError = finalErrors.FirstOrDefault();
+            var priorityWarning = finalWarnings.FirstOrDefault();
 
-        string? Trunc(string? val, int max) => val?.Length > max ? val[..max] : val;
-
-        // Map key fields
-        invoice.InvoiceNumber = Trunc(extractedData?.InvoiceNumber, 50) ?? "UNKNOWN";
-        invoice.FormNumber = Trunc(extractedData?.InvoiceTemplateCode, 20);
-        invoice.SerialNumber = Trunc(extractedData?.InvoiceSymbol, 50);
-        invoice.InvoiceCurrency = Trunc(extractedData?.InvoiceCurrency, 3) ?? "VND";
-        invoice.ExchangeRate = extractedData?.ExchangeRate ?? 1;
-        invoice.TotalAmountBeforeTax = extractedData?.TotalPreTax;
-        invoice.TotalTaxAmount = extractedData?.TotalTaxAmount;
-        invoice.TotalAmount = extractedData?.TotalAmount ?? 0;
-        invoice.TotalAmountInWords = extractedData?.TotalAmountInWords;
-        invoice.PaymentMethod = Trunc(extractedData?.PaymentTerms, 100);
-        invoice.MCCQT = Trunc(extractedData?.MCCQT, 50);
-
-        if (extractedData?.InvoiceDate != null)
-            invoice.InvoiceDate = DateTime.SpecifyKind(extractedData.InvoiceDate.Value, DateTimeKind.Utc);
-
-        if (invoice.Seller == null) invoice.Seller = new SellerInfo();
-        invoice.Seller.Name = Trunc(extractedData?.SellerName, 200);
-        invoice.Seller.TaxCode = Trunc(extractedData?.SellerTaxCode, 14);
-        invoice.Seller.Address = extractedData?.SellerAddress;
-        invoice.Seller.Phone = Trunc(extractedData?.SellerPhone, 20);
-        invoice.Seller.Email = Trunc(extractedData?.SellerEmail, 100);
-        invoice.Seller.BankAccount = Trunc(extractedData?.SellerBankAccount, 50);
-        invoice.Seller.BankName = Trunc(extractedData?.SellerBankName, 200);
-
-        if (invoice.Buyer == null) invoice.Buyer = new BuyerInfo();
-        invoice.Buyer.Name = Trunc(extractedData?.BuyerName, 200);
-        invoice.Buyer.TaxCode = Trunc(extractedData?.BuyerTaxCode, 14);
-        invoice.Buyer.Address = extractedData?.BuyerAddress;
-        invoice.Buyer.Phone = Trunc(extractedData?.BuyerPhone, 20);
-        invoice.Buyer.Email = Trunc(extractedData?.BuyerEmail, 100);
-        invoice.Buyer.ContactPerson = Trunc(extractedData?.BuyerContactPerson, 100);
-
-        // ── Determine document type ──
-        var docTypes = await unitOfWork.DocumentTypes.GetAllAsync();
-        var typeStr = ocrResult.Invoice?.Type?.Value?.ToUpper();
-        if (typeStr != null && typeStr.Contains("BÁN HÀNG"))
-        {
-            var saleType = docTypes.FirstOrDefault(d => d.TypeCode == "SALE" || d.FormTemplate == "02GTTT");
-            invoice.DocumentTypeId = saleType?.DocumentTypeId ?? 2;
-        }
-        else
-        {
-            var gtgtType = docTypes.FirstOrDefault(d => d.TypeCode == "GTGT" || d.FormTemplate == "01GTKT");
-            invoice.DocumentTypeId = gtgtType?.DocumentTypeId ?? 1;
-        }
-
-        // ── Business Logic CheckResult ──
-        var logicErrInfo = (logicResult.ErrorDetails ?? Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault()
-                        ?? (logicResult.WarningDetails ?? Enumerable.Empty<ValidationErrorDetail>()).FirstOrDefault();
-
-        string GetLayerStatus(bool valid, List<ValidationErrorDetail>? warnings) =>
-            !valid ? "Fail" : (warnings != null && warnings.Any()) ? "Warning" : "Pass";
-
-        await unitOfWork.InvoiceCheckResults.AddAsync(new InvoiceCheckResult
-        {
-            CheckId = Guid.NewGuid(),
-            InvoiceId = job.InvoiceId,
-            Category = "BUSINESS_LOGIC",
-            CheckName = "BusinessLogic",
-            CheckOrder = 3,
-            IsValid = logicResult.IsValid,
-            Status = GetLayerStatus(logicResult.IsValid, logicResult.WarningDetails),
-            ErrorCode = logicErrInfo?.ErrorCode,
-            ErrorMessage = logicErrInfo?.ErrorMessage,
-            Suggestion = logicErrInfo?.Suggestion,
-            DurationMs = (int)swLogic.ElapsedMilliseconds
-        });
-
-        // ── AUTO_UPLOAD_VALIDATION CheckResult ──
-        var checkStatus = isCompletelyValid ? (finalWarnings.Any() ? "WARNING" : "PASS") : "FAIL";
-        var priorityError = finalErrors.FirstOrDefault();
-        var priorityWarning = finalWarnings.FirstOrDefault();
-
-        await unitOfWork.InvoiceCheckResults.AddAsync(new InvoiceCheckResult
-        {
-            CheckId = Guid.NewGuid(),
-            InvoiceId = job.InvoiceId,
-            Category = "AUTO_UPLOAD_VALIDATION",
-            CheckName = "AUTO_UPLOAD_VALIDATION",
-            CheckOrder = 4,
-            IsValid = isCompletelyValid,
-            Status = checkStatus,
-            ErrorCode = priorityError?.ErrorCode ?? priorityWarning?.ErrorCode,
-            ErrorMessage = priorityError?.ErrorMessage ?? priorityWarning?.ErrorMessage,
-            Suggestion = priorityError?.Suggestion ?? priorityWarning?.Suggestion,
-            DurationMs = (int)swLogic.ElapsedMilliseconds,
-            ErrorDetails = JsonSerializer.Serialize(new
+            await unitOfWork.InvoiceCheckResults.AddAsync(new InvoiceCheckResult
             {
-                ErrorDetails = finalErrors,
-                WarningDetails = finalWarnings
-            })
-        });
+                CheckId = Guid.NewGuid(),
+                InvoiceId = job.InvoiceId,
+                Category = "AUTO_UPLOAD_VALIDATION",
+                CheckName = "AUTO_UPLOAD_VALIDATION",
+                CheckOrder = 4,
+                IsValid = isCompletelyValid,
+                Status = checkStatus,
+                ErrorCode = priorityError?.ErrorCode ?? priorityWarning?.ErrorCode,
+                ErrorMessage = priorityError?.ErrorMessage ?? priorityWarning?.ErrorMessage,
+                Suggestion = priorityError?.Suggestion ?? priorityWarning?.Suggestion,
+                DurationMs = (int)swLogic.ElapsedMilliseconds,
+                ErrorDetails = JsonSerializer.Serialize(new
+                {
+                    ErrorDetails = finalErrors,
+                    WarningDetails = finalWarnings
+                })
+            });
 
-        // ── Audit log ──
-        var uploadUser = await unitOfWork.Users.GetByIdAsync(job.UserId);
-        await unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
-        {
-            AuditId = Guid.NewGuid(),
-            InvoiceId = job.InvoiceId,
-            UserId = job.UserId,
-            UserEmail = uploadUser?.Email,
-            UserRole = uploadUser?.Role,
-            Action = "OCR_COMPLETED",
-            Changes = new List<AuditChange>
+            // ── Audit log ──
+            var uploadUser = await unitOfWork.Users.GetByIdAsync(job.UserId);
+            await unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+            {
+                AuditId = Guid.NewGuid(),
+                InvoiceId = job.InvoiceId,
+                UserId = job.UserId,
+                UserEmail = uploadUser?.Email,
+                UserRole = uploadUser?.Role,
+                Action = "OCR_COMPLETED",
+                Changes = new List<AuditChange>
             {
                 new() { Field = "Status", OldValue = "Processing", NewValue = invoice.Status, ChangeType = "UPDATE" },
                 new() { Field = "RiskLevel", OldValue = null, NewValue = invoice.RiskLevel, ChangeType = "UPDATE" }
             },
-            Comment = hasFatalError
-                ? "OCR worker hoàn tất nhưng hóa đơn bị từ chối do lỗi nghiệp vụ."
-                : (isCompletelyValid ? "OCR worker hoàn tất trích xuất dữ liệu từ ảnh hóa đơn." : "OCR worker hoàn tất nhưng hóa đơn có cảnh báo/lỗi.")
-        });
+                Comment = hasFatalError
+                    ? "OCR worker hoàn tất nhưng hóa đơn bị từ chối do lỗi nghiệp vụ."
+                    : (isCompletelyValid ? "OCR worker hoàn tất trích xuất dữ liệu từ ảnh hóa đơn." : "OCR worker hoàn tất nhưng hóa đơn có cảnh báo/lỗi.")
+            });
 
-        invoice.UpdatedAt = DateTime.UtcNow;
-        unitOfWork.Invoices.Update(invoice);
-        await unitOfWork.CompleteAsync();
+            invoice.UpdatedAt = DateTime.UtcNow;
+            unitOfWork.Invoices.Update(invoice);
+            await unitOfWork.CompleteAsync();
 
-        _logger.LogInformation("[OCR_WORKER STEP 6/7] ✅ Invoice {InvoiceId} updated → Status={Status}, RiskLevel={RiskLevel}",
-            job.InvoiceId, invoice.Status, invoice.RiskLevel);
+            _logger.LogInformation("[OCR_WORKER STEP 6/7] ✅ Invoice {InvoiceId} updated → Status={Status}, RiskLevel={RiskLevel}",
+                job.InvoiceId, invoice.Status, invoice.RiskLevel);
 
-        // ══════════════════════════════════════════════════
-        // STEP 7/7: Publish VietQR validation to SQS
-        // ══════════════════════════════════════════════════
-        if (!string.IsNullOrEmpty(invoice.Seller?.TaxCode)
-            && !hasFatalError
-            && await configProvider.GetBoolAsync("ENABLE_VIETQR_VALIDATION", true))
-        {
-            _logger.LogInformation("[OCR_WORKER STEP 7/7] 📤 Publishing VietQR validation to SQS...");
-            try
+            // ══════════════════════════════════════════════════
+            // STEP 7/7: Publish VietQR validation to SQS
+            // ══════════════════════════════════════════════════
+            if (!string.IsNullOrEmpty(invoice.Seller?.TaxCode)
+                && !hasFatalError
+                && await configProvider.GetBoolAsync("ENABLE_VIETQR_VALIDATION", true))
             {
-                var sqsMessage = new VietQrValidationMessage
+                _logger.LogInformation("[OCR_WORKER STEP 7/7] 📤 Publishing VietQR validation to SQS...");
+                try
                 {
-                    InvoiceId = invoice.InvoiceId,
-                    TaxCode = invoice.Seller.TaxCode,
-                    SellerName = invoice.Seller.Name ?? "N/A"
-                };
+                    var sqsMessage = new VietQrValidationMessage
+                    {
+                        InvoiceId = invoice.InvoiceId,
+                        TaxCode = invoice.Seller.TaxCode,
+                        SellerName = invoice.Seller.Name ?? "N/A"
+                    };
 
-                await sqsPublisher.PublishVietQrValidationAsync(sqsMessage, ct);
-                _logger.LogInformation("[OCR_WORKER STEP 7/7] ✅ VietQR message published for TaxCode={TaxCode}", invoice.Seller.TaxCode);
+                    await sqsPublisher.PublishVietQrValidationAsync(sqsMessage, ct);
+                    _logger.LogInformation("[OCR_WORKER STEP 7/7] ✅ VietQR message published for TaxCode={TaxCode}", invoice.Seller.TaxCode);
+                }
+                catch (Exception ex)
+                {
+                    // Don't fail the whole job — VietQR is non-critical
+                    _logger.LogError(ex, "[OCR_WORKER STEP 7/7] ⚠️ Failed to publish VietQR message. Invoice saved OK.");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                // Don't fail the whole job — VietQR is non-critical
-                _logger.LogError(ex, "[OCR_WORKER STEP 7/7] ⚠️ Failed to publish VietQR message. Invoice saved OK.");
+                _logger.LogInformation("[OCR_WORKER STEP 7/7] ⏭️ Skipped VietQR (no seller tax code, invalid, or disabled).");
             }
-        }
-        else
-        {
-            _logger.LogInformation("[OCR_WORKER STEP 7/7] ⏭️ Skipped VietQR (no seller tax code, invalid, or disabled).");
-        }
 
-        overallStopwatch.Stop();
-        _logger.LogInformation("[OCR_WORKER] ✅ COMPLETED. InvoiceId={InvoiceId}, Total={TotalMs}ms",
-            job.InvoiceId, overallStopwatch.ElapsedMilliseconds);
-        _logger.LogInformation(
-            "═══════════════════════════════════════════════════════════════\n");
+            overallStopwatch.Stop();
+            _logger.LogInformation("[OCR_WORKER] ✅ COMPLETED. InvoiceId={InvoiceId}, Total={TotalMs}ms",
+                job.InvoiceId, overallStopwatch.ElapsedMilliseconds);
+            _logger.LogInformation(
+                "═══════════════════════════════════════════════════════════════\n");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[OCR_WORKER] ❌ UNEXPECTED FATAL ERROR during processing InvoiceId={InvoiceId}", job.InvoiceId);
-            // Re-resolve UoW if needed (it's in scope, so safe)
-            await UpdateInvoiceStatus(unitOfWork, job.InvoiceId, "Failed", "Red", $"Lỗi hệ thống (Worker): {ex.Message}");
+            // Use a separate scope for the error update to ensure it's saved even if the current unitOfWork context is failed
+            await UpdateInvoiceStatusSafe(job.InvoiceId, "Failed", "Red", $"Lỗi hệ thống (Worker): {ex.Message}");
             throw; // Let SQS retry
+        }
+    }
+
+    /// <summary>
+    /// Safer version of UpdateInvoiceStatus that creates its own scope to ensure the update hits the DB
+    /// even if the main processing scope's context is in a failed/poisoned state.
+    /// </summary>
+    private async Task UpdateInvoiceStatusSafe(Guid invoiceId, string status, string riskLevel, string notes)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            await UpdateInvoiceStatus(unitOfWork, invoiceId, status, riskLevel, notes);
+            _logger.LogInformation("[OCR_WORKER] ✅ Emergency status update saved for {InvoiceId} -> {Status}", invoiceId, status);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[OCR_WORKER] ❌ FAILED emergency status update for {InvoiceId}", invoiceId);
         }
     }
 
