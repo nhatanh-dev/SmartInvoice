@@ -1,27 +1,28 @@
-using Amazon.S3;
+using System.Reflection;
+using System.Text;
 using Amazon.CognitoIdentityProvider;
+using Amazon.S3;
 using Amazon.SQS;
-using Microsoft.EntityFrameworkCore;
-using SmartInvoice.API.Data;
-using SmartInvoice.API.Repositories.Interfaces;
-using SmartInvoice.API.Repositories.Implementations;
-using SmartInvoice.API.Services.Interfaces;
-using SmartInvoice.API.Services.Implementations;
-using SmartInvoice.API.Entities;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.IdentityModel.Tokens;
-using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using SmartInvoice.API.Services;
-using Microsoft.AspNetCore.Authentication;
-using SmartInvoice.API.Security;
-using System.Reflection;
-using SmartInvoice.API.Constants;
+using Microsoft.IdentityModel.Tokens;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
+using SmartInvoice.API.Constants;
+using SmartInvoice.API.Data;
+using SmartInvoice.API.Entities;
+using SmartInvoice.API.Repositories.Implementations;
+using SmartInvoice.API.Repositories.Interfaces;
+using SmartInvoice.API.Security;
+using SmartInvoice.API.Services;
+using SmartInvoice.API.Services.Implementations;
+using SmartInvoice.API.Services.Interfaces;
+
 using System.Security.Claims;
 using SmartInvoice.API.Middleware;
 // DotNetEnv logic removed since we now use parameter store
@@ -48,7 +49,8 @@ builder.Configuration.AddSystemsManager("/SmartInvoice/dev/");
 var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
 if (string.IsNullOrEmpty(connectionString))
 {
-    connectionString = $"Host={builder.Configuration["POSTGRES_HOST"]};Port={builder.Configuration["POSTGRES_PORT"]};Database={builder.Configuration["POSTGRES_DB"]};Username={builder.Configuration["POSTGRES_USER"]};Password={builder.Configuration["POSTGRES_PASSWORD"]}";
+    connectionString =
+        $"Host={builder.Configuration["POSTGRES_HOST"]};Port={builder.Configuration["POSTGRES_PORT"]};Database={builder.Configuration["POSTGRES_DB"]};Username={builder.Configuration["POSTGRES_USER"]};Password={builder.Configuration["POSTGRES_PASSWORD"]}";
 }
 
 var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
@@ -56,10 +58,11 @@ dataSourceBuilder.EnableDynamicJson();
 var dataSource = dataSourceBuilder.Build();
 builder.Services.AddSingleton(dataSource);
 
-builder.Services.AddDbContext<AppDbContext>((sp, options) =>
-    options.UseNpgsql(sp.GetRequiredService<Npgsql.NpgsqlDataSource>()));
+builder.Services.AddDbContext<AppDbContext>(
+    (sp, options) => options.UseNpgsql(sp.GetRequiredService<Npgsql.NpgsqlDataSource>())
+);
 
-// 2. Kết nối AWS S3 
+// 2. Kết nối AWS S3
 // (Nó sẽ tự tìm AWS Credentials trong máy bạn ở ~/.aws/credentials hoặc biến môi trường)
 builder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());
 builder.Services.AddAWSService<IAmazonS3>();
@@ -109,34 +112,43 @@ builder.Services.AddHttpClient<IOcrClientService, OcrClientService>(client =>
 // - Timeout: 5 seconds per request
 // - Retry: 3 attempts with exponential backoff (1s, 2s, 4s) for 429 and 5xx errors
 // - Circuit Breaker: Break after 5 consecutive failures, stay broken for 1 minute
-builder.Services.AddHttpClient("VietQR")
+builder
+    .Services.AddHttpClient("VietQR")
     .AddTransientHttpErrorPolicy(p =>
         p.Or<HttpRequestException>()
-          .WaitAndRetryAsync(
-              retryCount: 3,
-              sleepDurationProvider: attempt =>
-              {
-                  // Exponential backoff: 2^attempt seconds (1s, 2s, 4s)
-                  var delaySeconds = Math.Pow(2, attempt);
-                  return TimeSpan.FromSeconds(delaySeconds);
-              },
-              onRetry: (outcome, timespan, retryCount, context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine($"[VietQR Retry] Attempt {retryCount} after {timespan.TotalSeconds}s");
-              }))
+            .WaitAndRetryAsync(
+                retryCount: 3,
+                sleepDurationProvider: attempt =>
+                {
+                    // Exponential backoff: 2^attempt seconds (1s, 2s, 4s)
+                    var delaySeconds = Math.Pow(2, attempt);
+                    return TimeSpan.FromSeconds(delaySeconds);
+                },
+                onRetry: (outcome, timespan, retryCount, context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[VietQR Retry] Attempt {retryCount} after {timespan.TotalSeconds}s"
+                    );
+                }
+            )
+    )
     .AddTransientHttpErrorPolicy(p =>
         p.Or<HttpRequestException>()
-          .CircuitBreakerAsync(
-              handledEventsAllowedBeforeBreaking: 5,
-              durationOfBreak: TimeSpan.FromMinutes(1),
-              onBreak: (outcome, timespan, context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine($"[VietQR Circuit Breaker] Circuit opened for {timespan.TotalMinutes} minutes");
-              },
-              onReset: (context) =>
-              {
-                  System.Diagnostics.Debug.WriteLine("[VietQR Circuit Breaker] Circuit reset");
-              }))
+            .CircuitBreakerAsync(
+                handledEventsAllowedBeforeBreaking: 5,
+                durationOfBreak: TimeSpan.FromMinutes(1),
+                onBreak: (outcome, timespan, context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[VietQR Circuit Breaker] Circuit opened for {timespan.TotalMinutes} minutes"
+                    );
+                },
+                onReset: (context) =>
+                {
+                    System.Diagnostics.Debug.WriteLine("[VietQR Circuit Breaker] Circuit reset");
+                }
+            )
+    )
     .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(5)));
 
 // Register VietQR Service
@@ -149,17 +161,21 @@ builder.Services.AddTransient<IClaimsTransformation, ClaimsTransformer>();
 
 // ==================== AWS SERVICES CONFIGURATION ====================
 // 5. Config AWS Cognito & SQS
-builder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());
+var awsOptions = builder.Configuration.GetAWSOptions();
+if (awsOptions.Region == null)
+{
+    awsOptions.Region = Amazon.RegionEndpoint.GetBySystemName(builder.Configuration["AWS_REGION"] ?? "ap-southeast-1");
+}
+builder.Services.AddDefaultAWSOptions(awsOptions);
 builder.Services.AddAWSService<IAmazonCognitoIdentityProvider>();
 builder.Services.AddAWSService<IAmazonSQS>();
 
 // ==================== SQS PUBLISHER & BACKGROUND CONSUMER ====================
-// Register SQS message publisher for VietQR validation requests
+// Register SQS message publisher for VietQR validation requests (Required by InvoiceService)
 builder.Services.AddScoped<ISqsMessagePublisher, SqsMessagePublisher>();
 
-// Register VietQR SQS Consumer as a hosted background service
-// This service continuously polls SQS for validation requests and updates invoices
-builder.Services.AddHostedService<VietQrSqsConsumerService>();
+// Register VietQR SQS Consumer as a hosted background service (Commented out to prevent OCR message theft)
+// builder.Services.AddHostedService<VietQrSqsConsumerService>();
 // ==================== END SQS CONFIGURATION ====================
 
 // ==================== OCR WORKER CONFIGURATION ====================
@@ -170,7 +186,7 @@ builder.Services.AddScoped<ISqsService, SqsService>();
 builder.Services.AddHttpClient("OcrWorker", client =>
 {
     client.BaseAddress = new Uri(ocrApiEndpoint);
-    client.Timeout = TimeSpan.FromMinutes(3); // OCR can be slow on large invoices
+    client.Timeout = TimeSpan.FromMinutes(5); // Increased from 3m to 5m for batch stability
 });
 
 // Background worker that polls SQS OCR queue, downloads from S3, calls OCR API, updates DB
@@ -180,7 +196,7 @@ builder.Services.AddHostedService<OcrWorkerService>();
 
 
 // 7. Config Authentication (Cognito)
-var region = builder.Configuration["AWS_REGION"];
+var region = builder.Configuration["AWS_REGION"] ?? builder.Configuration["AWS_DEFAULT_REGION"] ?? "ap-southeast-1";
 var userPoolId = builder.Configuration["COGNITO_USER_POOL_ID"];
 var authority = $"https://cognito-idp.{region}.amazonaws.com/{userPoolId}";
 
@@ -192,14 +208,21 @@ builder.Services.AddAuthentication(options =>
 .AddJwtBearer(options =>
 {
     options.Authority = authority;
+
+    // Explicitly set MetadataAddress to ensure .NET finds the AWS Cognito signing keys
+    options.MetadataAddress = $"{authority}/.well-known/openid-configuration";
+
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidateIssuer = true,
-        ValidIssuer = authority,
-        ValidateAudience = false, // Cognito Access Token often doesn't contain audience, Id Token does.
+        ValidateIssuer = true, 
+        
+        ValidIssuers = new[] { authority, $"{authority}/" }, 
+        
+        ValidateAudience = false, 
         ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        RoleClaimType = ClaimTypes.Role
+        ValidateIssuerSigningKey = true, 
+        
+        RoleClaimType = "custom:role" 
     };
 });
 
@@ -216,50 +239,71 @@ builder.Services.AddAuthorization(options =>
         var permissionValue = field.GetRawConstantValue()?.ToString();
         if (!string.IsNullOrEmpty(permissionValue))
         {
-            options.AddPolicy(permissionValue, policy => policy.RequireClaim("Permission", permissionValue));
+            // Dùng RequireAssertion để chấp nhận quyền cụ thể HOẶC quyền "*"
+            options.AddPolicy(
+                permissionValue,
+                policy =>
+                    policy.RequireAssertion(context =>
+                        context.User.HasClaim(c =>
+                            c.Type == "Permission" && (c.Value == permissionValue || c.Value == "*")
+                        )
+                    )
+            );
         }
     }
 });
 
-
-
 // 6. Config CORS
+var allowedOrigins = builder.Configuration["ALLOWED_ORIGINS"]?.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                   ?? new[] { "http://localhost:3000", "https://main.d3nvvjzg8ojoqd.amplifyapp.com" };
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAmplify",
-        builder =>
+        policyBuilder =>
         {
-            builder.WithOrigins("http://localhost:3000")
+            policyBuilder.WithOrigins(allowedOrigins)
                    .AllowAnyHeader()
                    .AllowAnyMethod()
                    .AllowCredentials(); // Important for cookies/auth if needed
         });
 });
 
-builder.Services.AddControllers()
+builder
+    .Services.AddControllers()
     .AddJsonOptions(options =>
     {
         // Dòng này giúp bỏ qua lỗi vòng lặp (Cycle) khi 2 bảng trỏ qua lại
-        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.ReferenceHandler = System
+            .Text
+            .Json
+            .Serialization
+            .ReferenceHandler
+            .IgnoreCycles;
     });
+
 // Swagger để test API
 builder.Services.AddSwaggerGen(c =>
 {
-    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\nNhập 'Bearer' [khoảng trắng] và chuỗi token của bạn.\r\n\r\nExample: \"Bearer 1safsfsdfdfd\"",
-        Name = "Authorization",
-        In = Microsoft.OpenApi.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
+    c.AddSecurityDefinition(
+        "Bearer",
+        new Microsoft.OpenApi.OpenApiSecurityScheme
+        {
+            Description =
+                "JWT Authorization header using the Bearer scheme. \r\n\r\nNhập 'Bearer' [khoảng trắng] và chuỗi token của bạn.\r\n\r\nExample: \"Bearer 1safsfsdfdfd\"",
+            Name = "Authorization",
+            In = Microsoft.OpenApi.ParameterLocation.Header,
+            Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
+            Scheme = "Bearer",
+        }
+    );
 
     c.AddSecurityRequirement(doc => new Microsoft.OpenApi.OpenApiSecurityRequirement
     {
         {
             new Microsoft.OpenApi.OpenApiSecuritySchemeReference("Bearer", doc, null),
             new List<string>()
-        }
+        },
     });
 });
 
@@ -310,21 +354,14 @@ if (app.Environment.IsDevelopment())
 
 // app.UseHttpsRedirection(); // Disabled for local Docker dev to prevent port issues
 
-app.UseCors(x => x
-    .AllowAnyMethod()
-    .AllowAnyHeader()
-    .SetIsOriginAllowed(origin => true) // Allow any origin
-    .AllowCredentials());
-
-// app.UseCors("AllowAmplify");
+app.UseCors("AllowAmplify");
 
 app.UseMiddleware<MaintenanceMiddleware>();
 
 app.UseAuthentication();
+app.UseMiddleware<SmartInvoice.API.Middlewares.TenantStatusMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
-
-
 
 app.Run();

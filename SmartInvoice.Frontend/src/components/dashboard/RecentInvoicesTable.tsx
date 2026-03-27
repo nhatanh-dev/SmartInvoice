@@ -86,7 +86,7 @@ const columns = [
 const RecentInvoicesTable: React.FC<RecentInvoicesTableProps> = ({ invoices, isLoading, onViewAll }) => {
     return (
         <Card
-            bordered={false}
+            variant="borderless"
             className="bg-dash-card rounded-[14px] shadow-dash h-full overflow-hidden"
             styles={{ body: { padding: '24px 0 0 0' } }}
         >
