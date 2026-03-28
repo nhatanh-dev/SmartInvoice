@@ -87,7 +87,7 @@ namespace SmartInvoice.API.Services.Implementations
                     IsValid = true,
                     IsRegistered = true,
                     CompanyName = existingCompany.CompanyName,
-                    ErrorMessage = "Company already registered."
+                    ErrorMessage = "Công ty đã được đăng ký trên hệ thống."
                 };
             }
 
@@ -183,7 +183,7 @@ namespace SmartInvoice.API.Services.Implementations
 
             // 1. Validation
             var existingUser = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
-            if (existingUser != null) throw new Exception("Email already exists.");
+            if (existingUser != null) throw new Exception("Email đã được sử dụng bởi một tài khoản khác.");
 
             var taxCodeCheck = await CheckTaxCodeAsync(new CheckTaxCodeRequest { TaxCode = request.TaxCode });
             if (!taxCodeCheck.IsValid || taxCodeCheck.IsRegistered)
@@ -293,7 +293,7 @@ namespace SmartInvoice.API.Services.Implementations
                 }
 
                 if (ex is UsernameExistsException)
-                    throw new Exception("Email already registered in Cognito.");
+                    throw new Exception("Email đã được đăng ký. Vui lòng đăng nhập hoặc khôi phục mật khẩu.");
 
                 throw;
             }
@@ -334,18 +334,18 @@ namespace SmartInvoice.API.Services.Implementations
                 var user = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
                 if (user == null)
                 {
-                    throw new Exception($"Local user record not found for email: {normalizedEmail}");
+                    throw new Exception($"Không tìm thấy thông tin người dùng nội bộ cho email: {normalizedEmail}");
                 }
 
                 if (!user.IsActive)
                 {
-                    throw new Exception("Account is inactive.");
+                    throw new Exception("Tài khoản chưa được kích hoạt hoặc đang bị tạm khóa.");
                 }
 
                 var company = await _unitOfWork.Companies.GetByIdAsync(user.CompanyId);
                 if (company != null && !company.IsActive)
                 {
-                    throw new Exception("Company account is locked.");
+                    throw new Exception("Tài khoản công ty đang bị tạm khóa.");
                 }
 
                 user.LastLoginAt = DateTime.UtcNow;
@@ -373,15 +373,15 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (NotAuthorizedException)
             {
-                throw new Exception("Invalid email or password.");
+                throw new Exception("Email hoặc mật khẩu không chính xác.");
             }
             catch (UserNotConfirmedException)
             {
-                throw new Exception("Account not verified. Please check your email.");
+                throw new Exception("Tài khoản chưa được xác thực. Vui lòng kiểm tra email của bạn.");
             }
             catch (Exception ex)
             {
-                throw new Exception($"Login failed: {ex.Message}");
+                throw new Exception($"Đăng nhập thất bại: {ex.Message}");
             }
         }
 
@@ -410,7 +410,7 @@ namespace SmartInvoice.API.Services.Implementations
 
                 var user = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
                 if (user == null)
-                    throw new Exception("Local user record not found.");
+                    throw new Exception("Không tìm thấy thông tin người dùng nội bộ.");
 
                 user.LastLoginAt = DateTime.UtcNow;
                 await _unitOfWork.CompleteAsync();
@@ -439,7 +439,7 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to respond to new password requirement: {ex.Message}");
+                throw new Exception($"Lỗi khi thiết lập mật khẩu mới: {ex.Message}");
             }
         }
 
@@ -466,7 +466,7 @@ namespace SmartInvoice.API.Services.Implementations
 
                 var user = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
                 if (user == null)
-                    throw new Exception("Local user record not found.");
+                    throw new Exception("Không tìm thấy thông tin người dùng nội bộ.");
 
                 var company = await _unitOfWork.Companies.GetByIdAsync(user.CompanyId);
 
@@ -492,7 +492,7 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (Exception ex)
             {
-                throw new Exception($"Refresh token failed: {ex.Message}");
+                throw new Exception($"Làm mới mã xác thực thất bại: {ex.Message}");
             }
         }
 
@@ -524,15 +524,15 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (CodeMismatchException)
             {
-                throw new Exception("Invalid verification code.");
+                throw new Exception("Mã xác thực không hợp lệ.");
             }
             catch (ExpiredCodeException)
             {
-                throw new Exception("Verification code expired.");
+                throw new Exception("Mã xác thực đã hết hạn.");
             }
             catch (Exception ex)
             {
-                throw new Exception($"Verification failed: {ex.Message}");
+                throw new Exception($"Xác thực thất bại: {ex.Message}");
             }
         }
 
@@ -554,7 +554,7 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (Exception ex)
             {
-                throw new Exception("Resend verification failed: " + ex.Message);
+                throw new Exception("Gửi lại mã xác thực thất bại: " + ex.Message);
             }
         }
 
@@ -574,7 +574,7 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (Exception ex)
             {
-                throw new Exception("Forgot password failed: " + ex.Message);
+                throw new Exception("Yêu cầu quên mật khẩu thất bại: " + ex.Message);
             }
         }
 
@@ -596,7 +596,7 @@ namespace SmartInvoice.API.Services.Implementations
             }
             catch (Exception ex)
             {
-                throw new Exception("Confirm forgot password failed: " + ex.Message);
+                throw new Exception("Xác nhận quên mật khẩu thất bại: " + ex.Message);
             }
         }
 
@@ -606,7 +606,7 @@ namespace SmartInvoice.API.Services.Implementations
 
             // 1. Check if user exists locally
             var existingUser = await _unitOfWork.Users.GetByEmailAsync(normalizedEmail);
-            if (existingUser != null) throw new Exception("Admin email already exists locally.");
+            if (existingUser != null) throw new Exception("Email quản trị viên đã tồn tại trên hệ thống.");
 
             await _unitOfWork.BeginTransactionAsync();
             bool cognitoCreated = false;
@@ -709,7 +709,7 @@ namespace SmartInvoice.API.Services.Implementations
                 }
 
                 if (ex is UsernameExistsException)
-                    throw new Exception("Email already registered in Cognito.");
+                    throw new Exception("Email đã được đăng ký trên hệ thống.");
 
                 throw;
             }

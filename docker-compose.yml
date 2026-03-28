@@ -7,6 +7,7 @@ services:
       context: ./SmartInvoice.API
       dockerfile: Dockerfile.dev
     container_name: smartinvoice-backend
+    restart: always
     ports:
       - "5172:8080"
     volumes:
@@ -70,6 +71,7 @@ services:
       context: ./invoice_ocr
       dockerfile: Dockerfile
     container_name: smartinvoice-ocr
+    restart: always
     ports:
       - "5000:5000"
     environment:

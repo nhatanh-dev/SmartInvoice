@@ -326,8 +326,8 @@ const Login: React.FC = () => {
         open={showNewPasswordModal}
         onCancel={() => setShowNewPasswordModal(false)}
         footer={null}
-        destroyOnClose
-        maskClosable={false}
+        destroyOnHidden
+        mask={{ closable: false }}
         className="rounded-2xl overflow-hidden"
       >
         <div className="mb-6 mt-2">

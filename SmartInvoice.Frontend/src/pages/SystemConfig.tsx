@@ -12,7 +12,7 @@ import {
   Input,
   InputNumber,
   Switch,
-  message,
+  App,
   Popconfirm,
   Descriptions,
   Tooltip,
@@ -43,6 +43,7 @@ import {
 const { Title, Text } = Typography;
 
 const SystemConfig: React.FC = () => {
+  const { message } = App.useApp();
   const [activeTab, setActiveTab] = useState("packages");
   const queryClient = useQueryClient();
 
@@ -311,7 +312,7 @@ const SystemConfig: React.FC = () => {
                           </Space>
                         }
                         size="small"
-                        bordered
+                        variant="outlined"
                         style={{ borderRadius: 8 }}
                       >
                         <Descriptions column={1} size="small" bordered>
@@ -424,7 +425,7 @@ const SystemConfig: React.FC = () => {
         confirmLoading={
           createPackageMutation.isPending || updatePackageMutation.isPending
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={packageForm}

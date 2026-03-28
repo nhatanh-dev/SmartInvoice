@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -33,6 +33,7 @@ namespace SmartInvoice.API.Controller
         private readonly IAwsS3Service _s3Service;
         private readonly ISqsService _sqsService;
         private readonly IConfiguration _configuration;
+        private readonly ILogger<InvoicesController> _logger;
 
         [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
         public InvoicesController(
@@ -43,7 +44,8 @@ namespace SmartInvoice.API.Controller
             ISystemConfigProvider configProvider,
             IAwsS3Service s3Service,
             ISqsService sqsService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ILogger<InvoicesController> logger)
         {
             _storageService = storageService;
             _invoiceProcessor = invoiceProcessor;
@@ -53,6 +55,7 @@ namespace SmartInvoice.API.Controller
             _s3Service = s3Service;
             _sqsService = sqsService;
             _configuration = configuration;
+            _logger = logger;
         }
 
         // ================================================
@@ -112,7 +115,7 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
             catch (InvalidOperationException ex)
             {
@@ -120,7 +123,7 @@ namespace SmartInvoice.API.Controller
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Message = $"Internal server error: {ex.Message}" });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ." });
             }
         }
 
@@ -139,11 +142,11 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = $"Internal server error: {ex.Message}" });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ." });
             }
         }
 
@@ -153,22 +156,30 @@ namespace SmartInvoice.API.Controller
 
         [HttpGet("debug-config")]
         [AllowAnonymous]
-        public IActionResult DebugConfig()
+        public async Task<IActionResult> DebugConfig([FromServices] SmartInvoice.API.Repositories.Interfaces.IUnitOfWork unitOfWork)
         {
             var sqsUrl = _configuration["AWS_SQS_OCR_URL"];
             var ocrEndpoint = _configuration["OCR_API_ENDPOINT"];
-            var allowedOrigins = _configuration["ALLOWED_ORIGINS"];
-            var region = _configuration["AWS_REGION"] ?? _configuration["AWS_DEFAULT_REGION"];
+            
+            var allInvoices = await unitOfWork.Invoices.GetAllAsync();
+            var recentInvoices = allInvoices
+                .OrderByDescending(i => i.CreatedAt)
+                .Take(5)
+                .Select(i => new { 
+                    i.InvoiceId, 
+                    i.Status, 
+                    CreatedAt = i.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"), 
+                    OriginalFileName = i.RawData != null ? i.RawData.ObjectKey : "Unknown",
+                    Notes = i.Notes
+                })
+                .ToList();
 
             return Ok(new
             {
                 HasSqsUrl = !string.IsNullOrEmpty(sqsUrl),
-                SqsUrlMasked = string.IsNullOrEmpty(sqsUrl) ? "NULL" : sqsUrl[..Math.Min(20, sqsUrl.Length)] + "...",
-                HasOcrEndpoint = !string.IsNullOrEmpty(ocrEndpoint),
+                SqsUrl = sqsUrl,
                 OcrEndpoint = ocrEndpoint,
-                HasAllowedOrigins = !string.IsNullOrEmpty(allowedOrigins),
-                Region = region ?? "NOT_SET",
-                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                RecentInvoices = recentInvoices
             });
         }
 
@@ -229,6 +240,7 @@ namespace SmartInvoice.API.Controller
 
                 // ── 3. Publish OCR job to SQS ──
                 var ocrQueueUrl = _configuration["AWS_SQS_OCR_URL"];
+                _logger.LogInformation(">>> [UPLOAD_API] Sending OCR message to Queue: {QueueUrl}", ocrQueueUrl);
                 if (!string.IsNullOrEmpty(ocrQueueUrl))
                 {
                     await _sqsService.SendMessageAsync(new OcrJobMessage
@@ -247,20 +259,20 @@ namespace SmartInvoice.API.Controller
                     InvoiceId = invoiceId,
                     S3Key = s3Key,
                     Status = "Processing",
-                    Message = "Hóa đơn đã được tải lên và đang được xử lý OCR."
+                    Message = "Hóa đơn đã được tải lên thành công và đang được xử lý OCR."
                 });
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
             catch (InvalidOperationException ex)
             {
                 return BadRequest(new { Message = ex.Message });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = $"Internal server error: {ex.Message}" });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ." });
             }
         }
 
@@ -293,9 +305,9 @@ namespace SmartInvoice.API.Controller
 
                 return Ok(logicResult);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = $"Lỗi: {ex.Message}" });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ." });
             }
             finally
             {
@@ -320,11 +332,11 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi lấy danh sách hóa đơn." });
             }
         }
 
@@ -338,9 +350,9 @@ namespace SmartInvoice.API.Controller
                 var result = await _invoiceService.GetTrashInvoicesAsync(query, companyId, userId, userRole);
                 return Ok(result);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi lấy danh sách hóa đơn trong thùng rác." });
             }
         }
 
@@ -355,9 +367,9 @@ namespace SmartInvoice.API.Controller
                 if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
                 return Ok(new { Message = "Phục hồi thành công." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi phục hồi hóa đơn." });
             }
         }
 
@@ -372,9 +384,9 @@ namespace SmartInvoice.API.Controller
                 if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
                 return Ok(new { Message = "Xóa vĩnh viễn thành công. Đã hoàn trả dung lượng." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi thực hiện xóa vĩnh viễn." });
             }
         }
 
@@ -395,11 +407,11 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi lấy chi tiết hóa đơn." });
             }
         }
 
@@ -419,11 +431,11 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi lấy đường dẫn file." });
             }
         }
 
@@ -443,11 +455,11 @@ namespace SmartInvoice.API.Controller
             }
             catch (UnauthorizedAccessException)
             {
-                return Unauthorized(new { Message = "User identity or company information is missing in token." });
+                return Unauthorized(new { Message = "Thông tin định danh người dùng hoặc công ty không hợp lệ." });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return StatusCode(500, new { Message = "Lỗi server nội bộ", Error = ex.Message });
+                return StatusCode(500, new { Message = "Lỗi hệ thống nội bộ khi lấy lịch sử phiên bản." });
             }
         }
 
@@ -459,7 +471,7 @@ namespace SmartInvoice.API.Controller
             {
                 var (userId, _, userRole, userEmail) = GetUserInfo();
                 await _invoiceService.UpdateInvoiceAsync(id, request, userId, userEmail, userRole, GetClientIp());
-                return Ok(new { Message = "Cập nhật thành công" });
+                return Ok(new { Message = "Cập nhật hóa đơn thành công." });
             }
             catch (KeyNotFoundException)
             {
@@ -517,7 +529,7 @@ namespace SmartInvoice.API.Controller
             {
                 return NotFound(new { Message = "Không tìm thấy hóa đơn." });
             }
-            catch (UnauthorizedAccessException ex)
+            catch (UnauthorizedAccessException)
             {
                 return Forbid();
             }

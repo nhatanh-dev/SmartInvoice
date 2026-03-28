@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card,
   Upload,
@@ -10,7 +10,8 @@ import {
   Space,
   Tag,
   Alert,
-  message,
+  App,
+  Tabs,
   Result,
   Table,
   Input,
@@ -19,7 +20,6 @@ import {
   Modal,
   Checkbox,
   Dropdown,
-  Tabs,
 } from "antd";
 import type { TableRowSelection } from "antd/es/table/interface";
 import {
@@ -86,7 +86,7 @@ type SubmitStatus = "idle" | "submitting" | "submitted" | "failed";
 interface ProcessResult {
   fileName: string;
   fileSize: number;
-  status: "pending" | "processing" | "success" | "error" | "warning";
+  status: "pending" | "uploading" | "queued" | "processing" | "success" | "error" | "warning";
   result?: ValidationResultExtended;
   errorMessage?: string;
   invoiceId?: string;
@@ -96,11 +96,19 @@ interface ProcessResult {
 }
 
 const UploadInvoice: React.FC = () => {
+  const { message } = App.useApp();
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   const [fileList, setFileList] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [results, setResults] = useState<ProcessResult[]>([]);
+  const [results, _setResults] = useState<ProcessResult[]>([]);
+  // Synchronous ref to track results during the async processing loop
+  const resultsRef = useRef<ProcessResult[]>([]);
+  const setResults = (valOrFn: ProcessResult[] | ((prev: ProcessResult[]) => ProcessResult[])) => {
+    const next = typeof valOrFn === "function" ? valOrFn(resultsRef.current) : valOrFn;
+    resultsRef.current = next;
+    _setResults(next);
+  };
   const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
   const [commentModalVisible, setCommentModalVisible] = useState(false);
   const [pendingSubmitId, setPendingSubmitId] = useState<string | null>(null);
@@ -317,10 +325,10 @@ const UploadInvoice: React.FC = () => {
           setSelectedRowKeys(getDefaultSelected(parsed));
           setCurrentStep(parsed.some(r => r.status === 'processing' || r.status === 'success' || r.status === 'warning') ? 2 : 0);
           
-          // If any items are processing, they came from a previous session/mount.
+          // If any items are processing or queued, they came from a previous session/mount.
           // We need to restart polling for them.
           parsed.forEach((item, index) => {
-            if (item.status === "processing" && item.invoiceId && item.processingMethod === "OCR") {
+            if ((item.status === "processing" || item.status === "queued") && item.invoiceId && item.processingMethod === "OCR") {
               resumePollingForInvoice(item.invoiceId, index);
             }
           });
@@ -353,7 +361,7 @@ const UploadInvoice: React.FC = () => {
   // Handle page reload/close - warn ONLY when there are items ACTIVELY processing
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const hasActiveProcessing = results.some(r => r.status === 'processing');
+      const hasActiveProcessing = results.some(r => r.status === 'processing' || r.status === 'queued' || r.status === 'uploading');
       if (hasActiveProcessing) {
         e.preventDefault();
         e.returnValue = "Hệ thống đang xử lý hóa đơn, bạn có chắc muốn thoát?";
@@ -434,10 +442,12 @@ const UploadInvoice: React.FC = () => {
     setResults(initialResults);
     setSelectedRowKeys([]);
 
-    // Simple semaphore to limit concurrent uploads to 4
+    // ════════════════════════════════════════════════════════════════════════
+    // Task 1: Giảm tải Concurrency xuống 1 để tránh lỗi Connection Refused local
+    // ════════════════════════════════════════════════════════════════════════
     const uploadSemaphore = {
       active: 0,
-      max: 4,
+      max: 1, // Chỉ upload lần lượt từng file
       queue: [] as (() => void)[],
       async acquire() {
         if (this.active < this.max) {
@@ -456,7 +466,6 @@ const UploadInvoice: React.FC = () => {
       },
     };
 
-    // Internal function to process a single file
     const processFile = async (i: number) => {
       const fileObj = fileList[i].originFileObj as File;
       if (!fileObj) return;
@@ -467,24 +476,17 @@ const UploadInvoice: React.FC = () => {
         ),
       );
 
-      // Check if file type matches the current tab
+      // Validation cơ bản trước khi upload
       const isXmlFile = fileObj.name.toLowerCase().endsWith(".xml");
       const isPdfOrImage = [".pdf", ".jpg", ".jpeg", ".png"].some((ext) =>
         fileObj.name.toLowerCase().endsWith(ext),
       );
 
-      // Validation
       if (activeTab === "xml" && !isXmlFile) {
         setResults((prev) =>
           prev.map((item, idx) =>
-            idx === i
-              ? {
-                  ...item,
-                  status: "error",
-                  errorMessage: "Chỉ chấp nhận file XML trong tab này.",
-                }
-              : item,
-          ),
+            idx === i ? { ...item, status: "error", errorMessage: "Chỉ chấp nhận file XML." } : item
+          )
         );
         return;
       }
@@ -492,21 +494,15 @@ const UploadInvoice: React.FC = () => {
       if (activeTab === "ocr" && !isPdfOrImage) {
         setResults((prev) =>
           prev.map((item, idx) =>
-            idx === i
-              ? {
-                  ...item,
-                  status: "error",
-                  errorMessage: "Chỉ chấp nhận file PDF, JPG, PNG trong tab này.",
-                }
-              : item,
-          ),
+            idx === i ? { ...item, status: "error", errorMessage: "Chỉ chấp nhận PDF/Ảnh." } : item
+          )
         );
         return;
       }
 
       try {
         if (activeTab === "xml") {
-          // ══════ XML TAB: Existing sync flow (Limited to 4 concurrent) ══════
+          // ══════════════ XML: Luồng đồng bộ (S3 -> API) ══════════════
           await uploadSemaphore.acquire();
           try {
             const { uploadUrl, s3Key } = await invoiceService.getUploadUrl(
@@ -524,33 +520,12 @@ const UploadInvoice: React.FC = () => {
             setResults((prev) => {
               const next = prev.map((item, idx) => {
                 if (idx !== i) return item;
-
-                let finalErrorMessage = undefined;
-                if (
-                  validation.errorDetails &&
-                  validation.errorDetails.length > 0
-                ) {
-                  finalErrorMessage = validation.errorDetails
-                    .map((e: any) => e.errorMessage)
-                    .join(" | ");
-                } else if (hasErrors) {
-                  finalErrorMessage = validation.errors.join(" | ");
-                } else if (
-                  validation.warningDetails &&
-                  validation.warningDetails.length > 0
-                ) {
-                  finalErrorMessage =
-                    validation.warningDetails[0].errorMessage || undefined;
-                } else if (hasWarnings) {
-                  finalErrorMessage = validation.warnings[0];
-                }
-
                 return {
                   ...item,
                   status: hasErrors ? "error" : hasWarnings ? "warning" : "success",
                   result: validation as ValidationResultExtended,
                   invoiceId: validation.invoiceId,
-                  errorMessage: finalErrorMessage,
+                  errorMessage: hasErrors ? validation.errors.join(" | ") : undefined,
                   submitStatus: "idle",
                 } as ProcessResult;
               });
@@ -561,63 +536,103 @@ const UploadInvoice: React.FC = () => {
             uploadSemaphore.release();
           }
         } else {
-          // ══════ OCR TAB: Async upload (Limited to 4) + delayed polling flow ══════
-          let uploadResult;
+          // ══════════════ OCR: Phase 1 — Upload lên Backend ══════════════
+          // Task 2: Try-Catch chặt chẽ cho uploadImage
           await uploadSemaphore.acquire();
           try {
-            uploadResult = await invoiceService.uploadImage(fileObj);
-            setCurrentStep((prev) => (prev < 2 ? 2 : prev));
+            setResults((prev) =>
+              prev.map((item, idx) =>
+                idx === i ? { ...item, status: "uploading", errorMessage: "Đang tải lên..." } : item
+              )
+            );
+
+            try {
+              const uploadResult = await invoiceService.uploadImage(fileObj);
+              
+              if (!uploadResult?.invoiceId) {
+                throw new Error("Server không trả về mã hóa đơn (InvoiceId).");
+              }
+
+              setCurrentStep((prev) => (prev < 2 ? 2 : prev));
+              
+              // Cập nhật trạng thái thành 'queued' để Phase 2 xử lý
+              setResults((prev) =>
+                prev.map((item, idx) =>
+                  idx === i ? { 
+                    ...item, 
+                    status: "queued", 
+                    invoiceId: uploadResult.invoiceId, 
+                    errorMessage: "Đang chờ hàng đợi..." 
+                  } : item
+                )
+              );
+            } catch (innerError: any) {
+              // Bắt lỗi upload (VD: net::ERR_CONNECTION_REFUSED)
+              console.error(`Upload failed for file ${i}:`, innerError);
+              handleProcessError(i, innerError);
+              // Lưu ý: Không ném lỗi ra ngoài để tránh làm sập luồng Promise.all của các file khác
+            }
           } finally {
             uploadSemaphore.release();
           }
-
-          setResults((prev) =>
-            prev.map((item, idx) =>
-              idx === i
-                ? {
-                    ...item,
-                    status: "processing",
-                    invoiceId: uploadResult.invoiceId,
-                    errorMessage: "Đang chờ AI khởi động (15s)...",
-                  }
-                : item,
-            ),
-          );
-
-          await new Promise((resolve) => setTimeout(resolve, 15000));
-
-          const detail = await invoiceService.pollInvoiceUntilDone(
-            uploadResult.invoiceId,
-            (status) => {
-              setResults((prev) =>
-                prev.map((item, idx) =>
-                  idx === i && item.status === "processing"
-                    ? {
-                        ...item,
-                        errorMessage:
-                          status === "Processing"
-                            ? "AI đang xử lý..."
-                            : `Trạng thái: ${status}`,
-                      }
-                    : item,
-                ),
-              );
-            },
-          );
-          updateResultWithDetail(i, detail);
         }
-      } catch (error: any) {
-        handleProcessError(i, error);
+      } catch (outerError: any) {
+        handleProcessError(i, outerError);
       }
     };
 
     try {
-      // Execute all file processing tasks in parallel
-      const tasks = fileList.map((_, i) => processFile(i));
-      await Promise.all(tasks);
+      if (activeTab === "xml") {
+        const tasks = fileList.map((_, i) => processFile(i));
+        await Promise.all(tasks);
+      } else {
+        // OCR Phase 1: Upload (Tuần tự do semaphore max=1)
+        const uploadTasks = fileList.map((_, i) => processFile(i));
+        await Promise.all(uploadTasks);
+
+        // Task 3: OCR Phase 2 — Polling SEQUENTIALLY (Chỉ những file thành công)
+        for (let i = 0; i < fileList.length; i++) {
+          // Đọc trạng thái mới nhất từ kết quả sau Phase 1
+          const item = resultsRef.current[i];
+          
+          // Chỉ poll nếu trạng thái là 'queued' (nghĩa là upload thành công)
+          if (!item || item.status !== "queued" || !item.invoiceId) {
+            console.log(`Skipping polling for file index ${i} due to status: ${item?.status}`);
+            continue;
+          }
+
+          setResults((prev) =>
+            prev.map((r, idx) =>
+              idx === i ? { ...r, status: "processing", errorMessage: "Đang bóc tách dữ liệu AI..." } : r
+            )
+          );
+
+          try {
+            const detail = await invoiceService.pollInvoiceUntilDone(
+              item.invoiceId,
+              (status) => {
+                setResults((prev) =>
+                  prev.map((r, idx) =>
+                    idx === i && r.status === "processing"
+                      ? {
+                          ...r,
+                          errorMessage: status === "Processing" ? "Đang xử lý..." : `Trạng thái: ${status}`,
+                        }
+                      : r
+                  )
+                );
+              },
+            );
+            updateResultWithDetail(i, detail);
+          } catch (error: any) {
+            handleProcessError(i, error);
+          }
+        }
+      }
       setCurrentStep(3);
     } catch (err) {
-      message.error("Quá trình tổng thể gặp lỗi. Vui lòng thử lại.");
+      console.error("Overall process error:", err);
+      message.error("Có lỗi xảy ra trong quá trình xử lý tổng thể.");
     } finally {
       setIsProcessing(false);
     }
@@ -761,6 +776,18 @@ const UploadInvoice: React.FC = () => {
           Chờ xử lý
         </Tag>
       );
+    if (status === "uploading")
+      return (
+        <Tag icon={<LoadingOutlined />} color="cyan">
+          Đang tải lên
+        </Tag>
+      );
+    if (status === "queued")
+      return (
+        <Tag icon={<ClockCircleOutlined />} color="blue">
+          Đang chờ hàng đợi
+        </Tag>
+      );
     if (status === "processing")
       return (
         <Tag icon={<LoadingOutlined />} color="processing">
@@ -804,6 +831,8 @@ const UploadInvoice: React.FC = () => {
     // View details option
     if (
       record.status !== "pending" &&
+      record.status !== "uploading" &&
+      record.status !== "queued" &&
       record.status !== "processing" &&
       record.invoiceId
     ) {
@@ -966,6 +995,10 @@ const UploadInvoice: React.FC = () => {
       render: (_: any, record: ProcessResult) => {
         if (record.status === "pending")
           return <Text type="secondary">Đang chờ xử lý...</Text>;
+        if (record.status === "uploading")
+          return <Text type="secondary">Đang tải lên...</Text>;
+        if (record.status === "queued")
+          return <Text type="secondary">Đang chờ hàng đợi...</Text>;
         if (record.status === "processing")
           return <Text type="secondary">Đang bóc tách dữ liệu...</Text>;
 
