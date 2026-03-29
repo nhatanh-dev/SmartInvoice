@@ -43,7 +43,7 @@ if (File.Exists(".env"))
 }
 
 // Load AWS Systems Manager Parameter Store
-builder.Configuration.AddSystemsManager("/SmartInvoice/prod/");
+builder.Configuration.AddSystemsManager("/SmartInvoice/dev/");
 
 // 1. Kết nối PostgreSQL
 var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");

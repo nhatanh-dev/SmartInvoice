@@ -1446,6 +1446,13 @@ namespace SmartInvoice.API.Services.Implementations
                 decimal? totalLineItemsPreTax = null;
                 decimal? totalLineItemsTax = null;
 
+                // CỜ NGHIỆP VỤ: Đánh dấu xem OCR có trả về trường tiền thuế nào không (tương tự như XML)
+                bool hasAnyLineTaxTag = false;
+                if (ocrData.Items != null && ocrData.Items.Any(i => i.LineTax?.Value != null))
+                {
+                    hasAnyLineTaxTag = true;
+                }
+
                 // 1. TÍNH TỔNG TIỀN TỪ DỮ LIỆU ĐÃ ĐƯỢC LÀM SẠCH VÀ NỘI SUY (tránh lỗi 0đ)
                 if (extractedData.LineItems != null && extractedData.LineItems.Any())
                 {
@@ -1517,6 +1524,8 @@ namespace SmartInvoice.API.Services.Implementations
                     isOcrVatInvoice = false;
                 }
 
+                decimal? finalLineItemsTaxToValidate = hasAnyLineTaxTag ? totalLineItemsTax : null;
+
                 ValidateFinancialLogic(
                     result,
                     totalAmount,
@@ -1524,7 +1533,7 @@ namespace SmartInvoice.API.Services.Implementations
                     totalTax,
                     tolerance,
                     totalLineItemsPreTax,
-                    totalLineItemsTax,
+                    finalLineItemsTaxToValidate,
                     isVatInvoice: isOcrVatInvoice,
                     "OCR"
                 );

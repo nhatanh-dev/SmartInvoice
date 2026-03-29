@@ -39,34 +39,9 @@ const ResizeHandle = () => (
 );
 
 const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ monthlyTrends, riskTrends, statusDistribution }) => {
-  // KIỂM TRA: Nếu tổng số hóa đơn ít quá (< 20) thì dùng data giả để báo cáo cho đẹp
-  const totalInvoices = monthlyTrends.reduce((sum, item) => sum + item.total, 0);
-  const isMock = totalInvoices < 20;
-
-  // Dữ liệu giả lập 6 tháng gần nhất cực đẹp
-  const displayMonthlyTrends = isMock ? [
-    { month: 'T10', total: 120, approved: 100, pending: 15, rejected: 5, totalAmount: 1250000000, totalTaxAmount: 125000000 },
-    { month: 'T11', total: 150, approved: 130, pending: 10, rejected: 10, totalAmount: 1850000000, totalTaxAmount: 185000000 },
-    { month: 'T12', total: 210, approved: 190, pending: 15, rejected: 5, totalAmount: 2550000000, totalTaxAmount: 255000000 },
-    { month: 'T1',  total: 95,  approved: 80,  pending: 10, rejected: 5, totalAmount: 980000000, totalTaxAmount: 98000000 },
-    { month: 'T2',  total: 110, approved: 95,  pending: 12, rejected: 3, totalAmount: 1420000000, totalTaxAmount: 142000000 },
-    { month: 'T3',  total: 180, approved: 150, pending: 20, rejected: 10, totalAmount: 2100000000, totalTaxAmount: 210000000 },
-  ] : monthlyTrends;
-
-  const displayRiskTrends = isMock ? [
-    { month: 'T10', green: 85, yellow: 10, orange: 3, red: 2 },
-    { month: 'T11', green: 80, yellow: 12, orange: 5, red: 3 },
-    { month: 'T12', green: 90, yellow: 5,  orange: 3, red: 2 },
-    { month: 'T1',  green: 75, yellow: 15, orange: 7, red: 3 },
-    { month: 'T2',  green: 82, yellow: 10, orange: 5, red: 3 },
-    { month: 'T3',  green: 88, yellow: 8,  orange: 2, red: 2 },
-  ] : riskTrends;
-
-  const displayStatus = isMock ? [
-    { name: 'Đã duyệt', value: 745, color: '#2d9a5c' },
-    { name: 'Chờ duyệt', value: 82,  color: '#e6a817' },
-    { name: 'Từ chối',  value: 38,  color: '#d63031' },
-  ] : statusDistribution;
+  const displayMonthlyTrends = monthlyTrends;
+  const displayRiskTrends = riskTrends;
+  const displayStatus = statusDistribution;
 
   return (
     <div className="mt-4 flex flex-col gap-4">
