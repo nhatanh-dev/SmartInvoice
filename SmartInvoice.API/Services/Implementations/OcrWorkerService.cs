@@ -261,6 +261,106 @@ public class OcrWorkerService : BackgroundService
             }
 
             // ══════════════════════════════════════════════════
+            // STEP 3.5/7: MERGE — OCR attaches to existing XML record
+            // ══════════════════════════════════════════════════
+            if (logicResult.MergeMode == DTOs.Invoice.DossierMergeMode.OcrAttachesToXml
+                && logicResult.MergeTargetInvoiceId.HasValue)
+            {
+                _logger.LogInformation("[OCR_WORKER STEP 3.5/7] 🔗 MERGE MODE: Attaching OCR visual to existing XML record");
+                _logger.LogInformation("   └─ MergeTargetInvoiceId: {TargetInvoiceId}", logicResult.MergeTargetInvoiceId);
+
+                var targetInvoice = await unitOfWork.Invoices.GetByIdAsync(logicResult.MergeTargetInvoiceId.Value);
+                if (targetInvoice == null)
+                {
+                    _logger.LogError("   ❌ Target XML invoice not found in database. Falling through to normal flow.");
+                }
+                else
+                {
+                    // Create FileStorage for the visual file
+                    Guid? mergeVisualFileId = null;
+                    if (!string.IsNullOrEmpty(job.S3Key))
+                    {
+                        var existingFile = await unitOfWork.FileStorages.FindByS3KeyAsync(job.S3Key);
+                        if (existingFile != null)
+                        {
+                            mergeVisualFileId = existingFile.FileId;
+                        }
+                        else
+                        {
+                            var bucketName = Environment.GetEnvironmentVariable("AWS_BUCKET_NAME")
+                                             ?? _configuration["AWS:BucketName"]
+                                             ?? "smartinvoice-storage-team-dat";
+
+                            var ext = Path.GetExtension(job.FileName).ToLowerInvariant();
+                            var mimeType = ext switch
+                            {
+                                ".png" => "image/png",
+                                ".jpg" or ".jpeg" => "image/jpeg",
+                                ".pdf" => "application/pdf",
+                                ".tiff" or ".tif" => "image/tiff",
+                                _ => "application/octet-stream"
+                            };
+
+                            var fileStorage = new FileStorage
+                            {
+                                FileId = Guid.NewGuid(),
+                                CompanyId = job.CompanyId,
+                                UploadedBy = job.UserId,
+                                OriginalFileName = Path.GetFileName(job.FileName),
+                                FileExtension = ext,
+                                FileSize = imageBytes.Length,
+                                MimeType = mimeType,
+                                S3BucketName = bucketName,
+                                S3Key = job.S3Key,
+                                IsProcessed = true,
+                                ProcessedAt = DateTime.UtcNow
+                            };
+
+                            mergeVisualFileId = fileStorage.FileId;
+                            await unitOfWork.FileStorages.AddAsync(fileStorage);
+                        }
+                    }
+
+                    // Attach visual file to existing XML invoice
+                    targetInvoice.VisualFileId = mergeVisualFileId;
+                    targetInvoice.UpdatedAt = DateTime.UtcNow;
+
+                    // Audit Log
+                    var mergeUser = await unitOfWork.Users.GetByIdAsync(job.UserId);
+                    await unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+                    {
+                        AuditId = Guid.NewGuid(),
+                        InvoiceId = targetInvoice.InvoiceId,
+                        UserId = job.UserId,
+                        UserEmail = mergeUser?.Email,
+                        UserRole = mergeUser?.Role,
+                        Action = "ATTACH_VISUAL_FILE",
+                        Changes = new List<AuditChange>
+                        {
+                            new() { Field = "VisualFileId", OldValue = null, NewValue = mergeVisualFileId?.ToString(), ChangeType = "UPDATE" }
+                        },
+                        Comment = "Đã đính kèm bản thể hiện PDF/Ảnh (từ OCR Worker). Dữ liệu không thay đổi (giữ nguyên bản gốc XML)."
+                    });
+
+                    // Delete the draft invoice created by upload-image endpoint
+                    var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
+                    if (draftInvoice != null && draftInvoice.InvoiceId != targetInvoice.InvoiceId)
+                    {
+                        unitOfWork.Invoices.Remove(draftInvoice);
+                        _logger.LogInformation("   🗑️ Deleted draft invoice {DraftId} (merged into {TargetId})",
+                            job.InvoiceId, targetInvoice.InvoiceId);
+                    }
+
+                    await unitOfWork.CompleteAsync();
+
+                    overallStopwatch.Stop();
+                    _logger.LogInformation("[OCR_WORKER] ✅ MERGE COMPLETED. Visual attached to XML invoice {TargetId}. Duration: {Ms}ms",
+                        targetInvoice.InvoiceId, overallStopwatch.ElapsedMilliseconds);
+                    return;
+                }
+            }
+
+            // ══════════════════════════════════════════════════
             // STEP 4/7: Extract OCR data → InvoiceExtractedData
             // ══════════════════════════════════════════════════
             _logger.LogInformation("[OCR_WORKER STEP 4/7] 🧠 Extracting invoice data from OCR result...");
