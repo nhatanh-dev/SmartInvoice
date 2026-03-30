@@ -362,6 +362,8 @@ app.UseAuthentication();
 app.UseMiddleware<SmartInvoice.API.Middlewares.TenantStatusMiddleware>();
 app.UseAuthorization();
 
+app.MapGet("/health", () => Results.Ok("Healthy"));
+
 app.MapControllers();
 
 app.Run();
