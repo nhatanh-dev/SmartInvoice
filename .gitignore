@@ -52,6 +52,10 @@ dist-ssr/
 
 # Test XML data
 test-xml-data/
+
+# document
+docs/
+
 # Model weights and artifacts (large files)
 *.onnx
 *.pt
