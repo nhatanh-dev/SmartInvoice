@@ -42,8 +42,11 @@ if (File.Exists(".env"))
     }
 }
 
-// Load AWS Systems Manager Parameter Store
-builder.Configuration.AddSystemsManager("/SmartInvoice/prod/");
+// Load AWS Systems Manager Parameter Store (chỉ trên Production)
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Configuration.AddSystemsManager("/SmartInvoice/prod/");
+}
 
 // 1. Kết nối PostgreSQL
 var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
@@ -255,7 +258,9 @@ builder.Services.AddAuthorization(options =>
 
 // 6. Config CORS
 var allowedOrigins = builder.Configuration["ALLOWED_ORIGINS"]?.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                   ?? new[] { "http://localhost:3000", "https://main.d3nvvjzg8ojoqd.amplifyapp.com" };
+                   ?? (builder.Environment.IsDevelopment()
+                       ? new[] { "http://localhost:3000" }
+                       : new[] { "https://smart-invoice-shield.io.vn" });
 
 builder.Services.AddCors(options =>
 {
@@ -346,11 +351,9 @@ using (var scope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// Swagger bật ở mọi môi trường để hỗ trợ debug (có thể tắt trên Prod nếu cần)
+app.UseSwagger();
+app.UseSwaggerUI();
 
 // app.UseHttpsRedirection(); // Disabled for local Docker dev to prevent port issues
 

@@ -39,6 +39,7 @@ Generated\ Files/
 .env.local
 .env.*
 !.env.example
+!.env.production
 
 # Sensitive Configs
 appsettings.Development.json

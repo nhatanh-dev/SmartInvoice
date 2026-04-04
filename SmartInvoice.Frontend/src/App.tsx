@@ -45,8 +45,8 @@ const App = () => (
               <Route path="/register" element={<Register />} />
               <Route path="/terms-of-use" element={<TermsOfUse />} />
               <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-              {/* Company Routes (Member & CompanyAdmin only) */}
-              <Route path="/app" element={<ProtectedRoute allowedRoles={['Member', 'CompanyAdmin']} />}>
+              {/* Company Routes (All company roles except SuperAdmin) */}
+              <Route path="/app" element={<ProtectedRoute allowedRoles={['CompanyAdmin', 'ChiefAccountant', 'Accountant', 'Viewer']} />}>
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to="/app/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
