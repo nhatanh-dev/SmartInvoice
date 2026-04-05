@@ -16,6 +16,7 @@ namespace SmartInvoice.API.Repositories.Implementations
         public async Task<Invoice?> GetInvoiceWithDetailsAsync(Guid id)
         {
             return await _context.Invoices
+                .IgnoreQueryFilters()
                 .Include(i => i.Company)
                 .Include(i => i.DocumentType)
                 .Include(i => i.CheckResults) // Replaced ValidationLayers and RiskCheckResults
