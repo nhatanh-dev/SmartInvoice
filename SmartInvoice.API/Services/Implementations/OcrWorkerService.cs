@@ -319,6 +319,10 @@ public class OcrWorkerService : BackgroundService
 
                             mergeVisualFileId = fileStorage.FileId;
                             await unitOfWork.FileStorages.AddAsync(fileStorage);
+
+                            var quotaService = scope.ServiceProvider.GetRequiredService<IQuotaService>();
+                            await quotaService.ConsumeStorageQuotaAsync(job.CompanyId, imageBytes.Length);
+                            _logger.LogInformation("   └─ ✅ FileStorage created for merge: {FileId}. Storage quota consumed: {Size} bytes.", mergeVisualFileId, imageBytes.Length);
                         }
                     }
 
