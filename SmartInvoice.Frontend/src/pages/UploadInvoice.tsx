@@ -134,6 +134,25 @@ const UploadInvoice: React.FC = () => {
 
   // Helper to update result state from detail (OCR mapping logic extracted)
   const updateResultWithDetail = (i: number, detail: any) => {
+    // Special case: PDF was hard-deleted after being merged into an existing XML invoice
+    if (detail.status === 'Merged') {
+      setResults((prev) => {
+        const next = prev.map((item, idx) => {
+          if (idx !== i) return item;
+          return {
+            ...item,
+            status: 'merged' as any,
+            invoiceId: undefined, // no standalone invoice exists anymore
+            errorMessage: detail.notes || 'Đã ghép vào hóa đơn XML tương ứng.',
+            submitStatus: 'idle',
+          } as ProcessResult;
+        });
+        setSelectedRowKeys(getDefaultSelected(next));
+        return next;
+      });
+      return;
+    }
+
     const isFailed = detail.status === "Failed" || detail.status === "Rejected";
     const hasWarnings =
       detail.riskLevel === "Yellow" || detail.riskLevel === "Orange";
@@ -256,6 +275,8 @@ const UploadInvoice: React.FC = () => {
   };
 
   const handleProcessError = (i: number, error: any, invoiceId?: string) => {
+    // Note: 404 errors are handled gracefully in pollInvoiceUntilDone (treated as merge success)
+    // so we only attempt cleanup for other non-404 errors
     if (invoiceId && error?.response?.status !== 404) {
       invoiceService.deleteInvoice(invoiceId)
         .then(() => invoiceService.hardDeleteInvoice(invoiceId))
@@ -574,7 +595,7 @@ const UploadInvoice: React.FC = () => {
             } catch (innerError: any) {
               // Bắt lỗi upload (VD: net::ERR_CONNECTION_REFUSED)
               console.error(`Upload failed for file ${i}:`, innerError);
-              handleProcessError(i, innerError, invoiceId);
+              handleProcessError(i, innerError, resultsRef.current[i]?.invoiceId);
               // Lưu ý: Không ném lỗi ra ngoài để tránh làm sập luồng Promise.all của các file khác
             }
           } finally {
@@ -793,6 +814,12 @@ const UploadInvoice: React.FC = () => {
       return (
         <Tag icon={<LoadingOutlined />} color="processing">
           Đang xử lý
+        </Tag>
+      );
+    if (status === "merged")
+      return (
+        <Tag icon={<CheckCircleOutlined />} color="purple">
+          Đã ghép vào XML
         </Tag>
       );
     const hasWarnings =
