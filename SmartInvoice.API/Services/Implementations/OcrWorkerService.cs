@@ -343,17 +343,15 @@ public class OcrWorkerService : BackgroundService
                         Comment = "Đã đính kèm bản thể hiện PDF/Ảnh (từ OCR Worker). Dữ liệu không thay đổi (giữ nguyên bản gốc XML)."
                     });
 
-                    // SOFT DELETE the draft invoice instead of hard-delete
-                    // This allows the UI polling to still find the record (since we updated Repository) 
-                    // and see the "Success" note, while IsDeleted=true hides it from main lists.
+                    // HARD DELETE the draft PDF invoice — no longer needed since VisualFileId
+                    // has been transferred to the XML target invoice. The FileStorage record
+                    // is intentionally kept alive (not removed) because targetInvoice.VisualFileId
+                    // now references it. Only the Invoice row itself is deleted to save DB space.
                     var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
                     if (draftInvoice != null && draftInvoice.InvoiceId != targetInvoice.InvoiceId)
                     {
-                        draftInvoice.Status = "Draft";
-                        draftInvoice.Notes = $"MERGED_INTO:{targetInvoice.InvoiceId}";
-                        draftInvoice.IsDeleted = true;
-                        draftInvoice.DeletedAt = DateTime.UtcNow;
-                        _logger.LogInformation("   🗑️ Soft-deleted draft invoice {DraftId} (merged into {TargetId})",
+                        unitOfWork.Invoices.Remove(draftInvoice);
+                        _logger.LogInformation("   🗑️ Hard-deleted draft PDF invoice {DraftId} (merged into XML invoice {TargetId}). FileStorage kept.",
                             job.InvoiceId, targetInvoice.InvoiceId);
                     }
 

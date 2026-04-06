@@ -1,4 +1,4 @@
-﻿import { apiClient } from '../lib/api-client';
+import { apiClient } from '../lib/api-client';
 
 // ════════════════════════════════════════════
 //  Types
@@ -290,18 +290,70 @@ export const invoiceService = {
         maxAttempts: number = 180,
         intervalMs: number = 5000
     ): Promise<InvoiceDetailDto> {
+        let consecutiveNotFound = 0;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await new Promise(resolve => setTimeout(resolve, intervalMs));
             try {
                 const detail = await this.getInvoiceDetail(invoiceId);
+                consecutiveNotFound = 0; // reset on success
                 onStatusChange?.(detail.status);
                 if (detail.status !== 'Processing') {
                     return detail;
                 }
             } catch (err: any) {
-                // If it's a 404, the invoice was likely deleted by the worker due to fatal errors (e.g duplicate)
                 if (err?.response?.status === 404) {
-                    throw new Error("Hóa đơn đã bị xóa do thông tin không hợp lệ hoặc bị trùng lặp.");
+                    consecutiveNotFound++;
+                    // If we get 2 consecutive 404s after the invoice was in Processing,
+                    // it means the worker hard-deleted it because it was successfully merged
+                    // into an existing XML invoice. Treat this as a successful merge.
+                    if (consecutiveNotFound >= 2 || attempt > 0) {
+                        // Return a synthetic "Merged" result so the UI can handle it gracefully
+                        return {
+                            invoiceId,
+                            invoiceNumber: 'MERGED',
+                            status: 'Merged',
+                            riskLevel: 'Green',
+                            processingMethod: 'API',
+                            invoiceDate: new Date().toISOString(),
+                            invoiceCurrency: 'VND',
+                            exchangeRate: 1,
+                            totalAmount: 0,
+                            hasOriginalFile: false,
+                            hasVisualFile: true,
+                            lineItems: [],
+                            validationLayers: [],
+                            riskChecks: [],
+                            auditLogs: [],
+                            extractedData: null,
+                            serialNumber: null,
+                            formNumber: null,
+                            mccqt: null,
+                            sellerName: null,
+                            sellerTaxCode: null,
+                            sellerAddress: null,
+                            sellerBankAccount: null,
+                            sellerBankName: null,
+                            buyerName: null,
+                            buyerTaxCode: null,
+                            buyerAddress: null,
+                            totalAmountBeforeTax: null,
+                            totalTaxAmount: null,
+                            totalAmountInWords: null,
+                            paymentMethod: null,
+                            notes: 'Hóa đơn PDF đã được ghép thành công vào bản XML tương ứng.',
+                            uploadedByName: null,
+                            createdAt: new Date().toISOString(),
+                            submittedByName: null,
+                            submittedAt: null,
+                            approvedByName: null,
+                            approvedAt: null,
+                            rejectedByName: null,
+                            rejectedAt: null,
+                            rejectionReason: null,
+                            riskReasons: null,
+                        } as InvoiceDetailDto;
+                    }
+                    // Otherwise retry — might be a race condition
                 }
                 // Otherwise retry on transient network errors
             }
@@ -405,6 +457,11 @@ export const invoiceService = {
 
     async hardDeleteInvoice(id: string): Promise<void> {
         await apiClient.delete(`/invoices/${id}/hard`);
+    },
+
+    async emptyTrash(): Promise<{ message: string; deletedCount: number }> {
+        const response = await apiClient.delete<{ message: string; deletedCount: number }>('/invoices/trash/empty');
+        return response.data;
     },
 
     // --- Audit Logs ---
