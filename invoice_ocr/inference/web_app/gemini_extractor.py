@@ -113,13 +113,27 @@ class GeminiExtractor:
     """
 
     def __init__(self, api_key: str):
-        self.client = genai.Client(api_key=api_key)
+        self.api_keys = [k.strip() for k in api_key.split(",") if k.strip()]
+        if not self.api_keys:
+            raise ValueError("No API keys provided")
+            
+        self.current_key_idx = 0
+        self._init_client()
+        
         self._config = types.GenerateContentConfig(
             temperature=TEMPERATURE,
             max_output_tokens=MAX_TOKENS,
             response_mime_type="application/json",  # force JSON output
         )
-        log.info("[Gemini] Initialized model: %s", GEMINI_MODEL)
+        log.info("[Gemini] Initialized model: %s with %d API keys", GEMINI_MODEL, len(self.api_keys))
+
+    def _init_client(self):
+        self.client = genai.Client(api_key=self.api_keys[self.current_key_idx])
+
+    def _rotate_key(self):
+        self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+        self._init_client()
+        log.warning("[Gemini] 🔄 Rotated to API key index %d", self.current_key_idx)
 
     def extract(
         self,
@@ -151,16 +165,46 @@ class GeminiExtractor:
             ocr_text = " ".join(str(w) for w in ocr_words[:500])  # cap at 500 words
             prompt += f"\n\n═══ VĂN BẢN OCR THAM KHẢO ═══\n{ocr_text}"
 
-        # Call Gemini
-        try:
-            response = self.client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[image_part, prompt],
-                config=self._config,
-            )
-            raw_text = response.text
-        except Exception as e:
-            raise RuntimeError(f"Gemini API error: {e}") from e
+        # Combine retry logic + key rotation
+        max_retries = max(len(self.api_keys) * 2, 4)
+        retry_delay = 10
+        raw_text = None
+
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=[image_part, prompt],
+                    config=self._config,
+                )
+                raw_text = response.text
+                break
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_retryable_error = (
+                    "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg or "too many" in error_msg or
+                    "503" in error_msg or "unavailable" in error_msg or
+                    "500" in error_msg or "internal" in error_msg or "timeout" in error_msg
+                )
+                
+                if is_retryable_error:
+                    log.warning(f"[Gemini] ⚠️ Retryable error hit (Attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        if len(self.api_keys) > 1:
+                            self._rotate_key()
+                            time.sleep(1) # slight delay when switching keys
+                        else:
+                            log.warning(f"[Gemini] Sleeping {retry_delay}s before retry...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2 # Exponential backoff (10s, 20s, 40s...)
+                        continue
+                    else:
+                        raise RuntimeError(f"Gemini API Error exhausted after {max_retries} retries.") from e
+                else:
+                    raise RuntimeError(f"Gemini API unrecoverable error: {e}") from e
+
+        if not raw_text:
+            raise RuntimeError("Gemini API failed to return text.")
 
         elapsed = (time.monotonic() - t0) * 1000
         log.info("[Gemini] Extraction done in %.0fms", elapsed)
