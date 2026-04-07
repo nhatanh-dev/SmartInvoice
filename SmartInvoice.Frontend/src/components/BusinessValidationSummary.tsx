@@ -55,6 +55,20 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
   // Định nghĩa các Rules (Đã bổ sung các biến thể mã lỗi có thể trả về từ BE)
   const rules = [
     {
+      label: "Đúng định dạng và cấu trúc tệp gốc",
+      errorCodes: [
+        "ERR_XML_STRUCT",
+        "ERR_XML_MISSING_FIELD",
+        "ERR_XML_SYS",
+        "ERR_OCR_EMPTY",
+        "XmlStruct",
+        "XmlMissingField",
+        "XmlSys",
+        "OcrEmpty",
+      ],
+      warningCodes: [],
+    },
+    {
       label: "Hóa đơn không bị trùng lặp",
       errorCodes: [
         "ERR_LOGIC_DUP",

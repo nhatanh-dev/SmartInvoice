@@ -11,9 +11,15 @@ public class InvoiceAuditLog
     public Guid AuditId { get; set; }
 
     // --- Invoice Relation ---
-    public Guid InvoiceId { get; set; }
+    public Guid? InvoiceId { get; set; }
     [ForeignKey(nameof(InvoiceId))]
     public Invoice? Invoice { get; set; }
+
+    public string? InvoiceNumber { get; set; } // Snapshot số hóa đơn để hiển thị khi hóa đơn gốc bị xóa
+    
+    public Guid CompanyId { get; set; } // Phục vụ bảo mật đa thuê (Multi-tenancy) khi Invoice bị xóa
+    [ForeignKey(nameof(CompanyId))]
+    public Company? Company { get; set; }
 
     // --- User Info ---
     public Guid UserId { get; set; }

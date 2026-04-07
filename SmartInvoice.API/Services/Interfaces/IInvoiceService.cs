@@ -21,13 +21,13 @@ namespace SmartInvoice.API.Services.Interfaces
                 // ─── CRUD ───
                 Task<Invoice> CreateInvoiceAsync(Invoice invoice);
                 Task UpdateInvoiceAsync(Guid id, UpdateInvoiceDto request, Guid userId, string userEmail, string userRole, string? ipAddress);
-                                Task<bool> DeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole);
+                                Task<bool> DeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress);
                 
                 // ─── Trash & Restore ───
                 Task<PagedResult<InvoiceDto>> GetTrashInvoicesAsync(GetInvoicesQueryDto query, Guid companyId, Guid userId, string userRole);
-                Task<bool> RestoreInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole);
-                Task<bool> HardDeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole);
-                Task<int> EmptyTrashAsync(Guid companyId, Guid userId, string userRole);
+                Task<bool> RestoreInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress);
+                Task<bool> HardDeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress);
+                Task<int> EmptyTrashAsync(Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress);
 
                 // ─── Workflow ───
                 Task SubmitInvoiceAsync(Guid invoiceId, Guid companyId, Guid userId, string userEmail, string userRole, string? comment, string? ipAddress);

@@ -167,7 +167,10 @@ public class AppDbContext : DbContext
             .HasOne(al => al.Invoice)
             .WithMany(i => i.AuditLogs)
             .HasForeignKey(al => al.InvoiceId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<InvoiceAuditLog>()
+            .HasIndex(al => al.CompanyId); // Optimize filtering by company even after invoice deletion
 
         // =================================================================================
         // 3. INDEXES

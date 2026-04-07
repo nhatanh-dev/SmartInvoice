@@ -5,6 +5,7 @@ using SmartInvoice.API.Entities;
 using SmartInvoice.API.Entities.JsonModels;
 using SmartInvoice.API.Repositories.Interfaces;
 using SmartInvoice.API.Services.Interfaces;
+using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 
 namespace SmartInvoice.API.Services.Implementations;
@@ -24,6 +25,7 @@ public class OcrWorkerService : BackgroundService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OcrWorkerService> _logger;
+    private readonly IMemoryCache _cache;
     private readonly SemaphoreSlim _concurrencySemaphore = new(1, 1); // Sequential: 1 at a time to match single-worker OCR Python server
     private string? _queueUrl;
     private const int WaitTimeSeconds = 20;
@@ -33,12 +35,14 @@ public class OcrWorkerService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
-        ILogger<OcrWorkerService> logger)
+        ILogger<OcrWorkerService> logger,
+        IMemoryCache cache)
     {
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+        _cache = cache;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -336,6 +340,8 @@ public class OcrWorkerService : BackgroundService
                     {
                         AuditId = Guid.NewGuid(),
                         InvoiceId = targetInvoice.InvoiceId,
+                        InvoiceNumber = targetInvoice.InvoiceNumber,
+                        CompanyId = targetInvoice.CompanyId,
                         UserId = job.UserId,
                         UserEmail = mergeUser?.Email,
                         UserRole = mergeUser?.Role,
@@ -357,6 +363,9 @@ public class OcrWorkerService : BackgroundService
                         unitOfWork.Invoices.Remove(draftInvoice);
                         _logger.LogInformation("   🗑️ Hard-deleted draft PDF invoice {DraftId} (merged into XML invoice {TargetId}). FileStorage kept.",
                             job.InvoiceId, targetInvoice.InvoiceId);
+                            
+                        // Cache the result for frontend polling to avoid 404 confusion
+                        _cache.Set($"OcrResult_{job.InvoiceId}", new { Status = "Merged", Message = "Hóa đơn đã được tự động ghép vào bản XML tương ứng." }, TimeSpan.FromMinutes(10));
                     }
 
                     await unitOfWork.CompleteAsync();
@@ -371,9 +380,9 @@ public class OcrWorkerService : BackgroundService
             // Check for fatal errors (duplicate / not owner)
             // Dừng và xóa Draft Invoice nếu lỗi nghiêm trọng (giống luồng XML) để tránh lưu dữ liệu rác
             // SKIP if merge mode was intended but target not found (fallback to normal flow)
-            var fatalErrorCodes = new HashSet<string> { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected };
+            var fatalErrorCodes = new HashSet<string> { ErrorCodes.LogicDuplicate, ErrorCodes.LogicDuplicateRejected, ErrorCodes.LogicOwner };
             var hasFatalError = finalErrors.Any(e =>
-                !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode));
+                !string.IsNullOrEmpty(e.ErrorCode) && fatalErrorCodes.Contains(e.ErrorCode!));
 
             if (hasFatalError)
             {
@@ -397,6 +406,10 @@ public class OcrWorkerService : BackgroundService
                             unitOfWork.FileStorages.Remove(originalFile);
                     }
                     unitOfWork.Invoices.Remove(draftInvoice);
+
+                    // Cache the fatal error reason for frontend polling to explain the hard delete
+                    _cache.Set($"OcrResult_{job.InvoiceId}", new { Status = "FatalError", Message = fatalErr.ErrorMessage }, TimeSpan.FromMinutes(10));
+
                     await unitOfWork.CompleteAsync();
                 }
                 return;
@@ -606,6 +619,8 @@ public class OcrWorkerService : BackgroundService
             {
                 AuditId = Guid.NewGuid(),
                 InvoiceId = job.InvoiceId,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = job.CompanyId,
                 UserId = job.UserId,
                 UserEmail = uploadUser?.Email,
                 UserRole = uploadUser?.Role,

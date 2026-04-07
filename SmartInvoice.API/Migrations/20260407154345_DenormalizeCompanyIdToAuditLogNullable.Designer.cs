@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SmartInvoice.API.Data;
@@ -13,9 +14,11 @@ using SmartInvoice.API.Entities.JsonModels;
 namespace SmartInvoice.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407154345_DenormalizeCompanyIdToAuditLogNullable")]
+    partial class DenormalizeCompanyIdToAuditLogNullable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -639,7 +642,7 @@ namespace SmartInvoice.API.Migrations
                     b.Property<string>("Comment")
                         .HasColumnType("text");
 
-                    b.Property<Guid>("CompanyId")
+                    b.Property<Guid?>("CompanyId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
@@ -647,9 +650,6 @@ namespace SmartInvoice.API.Migrations
 
                     b.Property<Guid?>("InvoiceId")
                         .HasColumnType("uuid");
-
-                    b.Property<string>("InvoiceNumber")
-                        .HasColumnType("text");
 
                     b.Property<string>("IpAddress")
                         .HasMaxLength(50)
@@ -1638,9 +1638,7 @@ namespace SmartInvoice.API.Migrations
                 {
                     b.HasOne("SmartInvoice.API.Entities.Company", "Company")
                         .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .HasForeignKey("CompanyId");
 
                     b.HasOne("SmartInvoice.API.Entities.Invoice", "Invoice")
                         .WithMany("AuditLogs")

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Card, Typography, Timeline, Tag, Avatar, Input, Select, DatePicker, Row, Col, Pagination, Spin, Empty, Tooltip, Button } from 'antd';
 import {
   UploadOutlined, EditOutlined, CheckCircleOutlined, SendOutlined,
-  CloseCircleOutlined, UserOutlined, SearchOutlined, FilterOutlined, ClearOutlined,
+  CloseCircleOutlined, UserOutlined, SearchOutlined, FilterOutlined, ClearOutlined, DeleteOutlined, UndoOutlined, PaperClipOutlined
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -13,11 +13,17 @@ const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
 const actionConfig: Record<string, { color: string; tagColor: string; icon: React.ReactNode; label: string }> = {
-  UPLOAD:  { color: '#1a4b8c', tagColor: 'blue',   icon: <UploadOutlined />,       label: 'Tải lên' },
-  EDIT:    { color: '#e6a817', tagColor: 'gold',   icon: <EditOutlined />,         label: 'Chỉnh sửa' },
-  SUBMIT:  { color: '#7c3aed', tagColor: 'purple', icon: <SendOutlined />,         label: 'Gửi duyệt' },
-  APPROVE: { color: '#2d9a5c', tagColor: 'green',  icon: <CheckCircleOutlined />,  label: 'Phê duyệt' },
-  REJECT:  { color: '#d63031', tagColor: 'red',    icon: <CloseCircleOutlined />,  label: 'Từ chối' },
+  UPLOAD:       { color: '#1a4b8c', tagColor: 'blue',   icon: <UploadOutlined />,       label: 'Tải lên' },
+  UPLOAD_OCR:   { color: '#1a4b8c', tagColor: 'blue',   icon: <UploadOutlined />,       label: 'Tải lên (OCR)' },
+  OCR_COMPLETED:{ color: '#2d9a5c', tagColor: 'green',  icon: <CheckCircleOutlined />,  label: 'Hoàn tất OCR' },
+  ATTACH_VISUAL_FILE:{ color: '#1890ff', tagColor: 'blue',   icon: <PaperClipOutlined />,    label: 'Đính kèm tệp' },
+  EDIT:         { color: '#e6a817', tagColor: 'gold',   icon: <EditOutlined />,         label: 'Chỉnh sửa' },
+  SUBMIT:       { color: '#7c3aed', tagColor: 'purple', icon: <SendOutlined />,         label: 'Gửi duyệt' },
+  APPROVE:      { color: '#2d9a5c', tagColor: 'green',  icon: <CheckCircleOutlined />,  label: 'Phê duyệt' },
+  REJECT:       { color: '#d63031', tagColor: 'red',    icon: <CloseCircleOutlined />,  label: 'Từ chối' },
+  TRASH:        { color: '#fa8c16', tagColor: 'orange', icon: <DeleteOutlined />,       label: 'Xóa tạm' },
+  RESTORE:      { color: '#13c2c2', tagColor: 'cyan',   icon: <UndoOutlined />,         label: 'Khôi phục' },
+  HARD_DELETE:  { color: '#cf1322', tagColor: 'red',    icon: <DeleteOutlined />,       label: 'Xóa vĩnh viễn' },
 };
 
 const getActionInfo = (action: string) => actionConfig[action] || { color: '#94a3b8', tagColor: 'default', icon: <EditOutlined />, label: action };

@@ -290,34 +290,41 @@ export const invoiceService = {
         maxAttempts: number = 180,
         intervalMs: number = 5000
     ): Promise<InvoiceDetailDto> {
-        let consecutiveNotFound = 0;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await new Promise(resolve => setTimeout(resolve, intervalMs));
             try {
-                const detail = await this.getInvoiceDetail(invoiceId);
-                consecutiveNotFound = 0; // reset on success
+                // Add timestamp to prevent browser cache from replaying 410/404 results incorrectly
+                const detail = await apiClient.get<InvoiceDetailDto>(`/invoices/${invoiceId}?_=${Date.now()}`).then(r => r.data);
+                
                 onStatusChange?.(detail.status);
                 if (detail.status !== 'Processing') {
                     return detail;
                 }
             } catch (err: any) {
-                if (err?.response?.status === 404) {
-                    consecutiveNotFound++;
-                    // If we get 2 consecutive 404s after the invoice was in Processing,
-                    // it means the worker hard-deleted it because it was successfully merged
-                    // into an existing XML invoice. Treat this as a successful merge.
-                    if (consecutiveNotFound >= 2 || attempt > 0) {
-                        // Return a synthetic "Merged" result so the UI can handle it gracefully
+                const status = err?.response?.status;
+                const resData = err?.response?.data;
+
+                // 410 Gone: Backend explicitly tells us the invoice was hard-deleted for a reason
+                if (status === 410) {
+                    const resStatus = resData?.status || resData?.Status;
+                    const resMessage = resData?.message || resData?.Message;
+
+                    if (resStatus === 'FatalError') {
+                        throw new Error(resMessage || 'Hóa đơn có lỗi nghiêm trọng và đã bị hệ thống từ chối.');
+                    }
+                    if (resStatus === 'Merged') {
                         return {
                             invoiceId,
                             invoiceNumber: 'MERGED',
                             status: 'Merged',
-                            riskLevel: 'Green',
-                            processingMethod: 'API',
+                            // ... rest of synthetic object
+                            notes: resMessage || 'Hóa đơn đã được tự động ghép vào bản XML tương ứng.',
                             invoiceDate: new Date().toISOString(),
                             invoiceCurrency: 'VND',
                             exchangeRate: 1,
                             totalAmount: 0,
+                            riskLevel: 'Green',
+                            processingMethod: 'API',
                             hasOriginalFile: false,
                             hasVisualFile: true,
                             lineItems: [],
@@ -325,37 +332,29 @@ export const invoiceService = {
                             riskChecks: [],
                             auditLogs: [],
                             extractedData: null,
-                            serialNumber: null,
-                            formNumber: null,
-                            mccqt: null,
-                            sellerName: null,
-                            sellerTaxCode: null,
-                            sellerAddress: null,
-                            sellerBankAccount: null,
-                            sellerBankName: null,
-                            buyerName: null,
-                            buyerTaxCode: null,
-                            buyerAddress: null,
-                            totalAmountBeforeTax: null,
-                            totalTaxAmount: null,
-                            totalAmountInWords: null,
-                            paymentMethod: null,
-                            notes: 'Hóa đơn PDF đã được ghép thành công vào bản XML tương ứng.',
-                            uploadedByName: null,
                             createdAt: new Date().toISOString(),
-                            submittedByName: null,
-                            submittedAt: null,
-                            approvedByName: null,
-                            approvedAt: null,
-                            rejectedByName: null,
-                            rejectedAt: null,
-                            rejectionReason: null,
-                            riskReasons: null,
                         } as InvoiceDetailDto;
                     }
-                    // Otherwise retry — might be a race condition
+                    throw new Error(resMessage || 'Hóa đơn đã được xử lý và xóa khỏi hàng chờ (410).');
                 }
-                // Otherwise retry on transient network errors
+
+                if (status === 404) {
+                    // Only poll a few times for 404 before giving up, as it might be a true deletion/error
+                    if (attempt >= 5) { 
+                        throw new Error('Không tìm thấy thông tin hóa đơn. Có thể đã xảy ra lỗi trong quá trình xử lý.');
+                    }
+                    continue; // Retry for 404 (might be a race condition where DB isn't updated yet)
+                }
+
+                // For any other explicit errors (500, 403, 401, 400), don't poll anymore
+                if (status && status >= 400) {
+                    throw new Error(resData?.message || `Lỗi hệ thống (${status}). Kết thúc tiến trình.`);
+                }
+                
+                // If it's a network timeout/no response, we can allow a few retries
+                if (attempt >= 10) {
+                    throw new Error('Kết nối mạng không ổn định hoặc Server không phản hồi. Vui lòng thử lại sau.');
+                }
             }
         }
         throw new Error('OCR processing timed out after ' + (maxAttempts * intervalMs / 1000) + 's');

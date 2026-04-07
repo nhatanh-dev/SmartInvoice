@@ -35,11 +35,11 @@ public class AuditLogController : ControllerBase
             if (string.IsNullOrEmpty(companyIdClaim) || !Guid.TryParse(companyIdClaim, out var companyId))
                 return Unauthorized(new { message = "CompanyId claim is missing or invalid." });
 
-            // Base query: join AuditLog → Invoice for company scoping
+            // Base query: Phi bình thường hóa CompanyId giúp xem log độc lập với hóa đơn
             var baseQuery = _db.InvoiceAuditLogs
                 .Include(a => a.Invoice)
                 .Include(a => a.User)
-                .Where(a => a.Invoice != null && a.Invoice.CompanyId == companyId && !a.Invoice.IsDeleted);
+                .Where(a => a.CompanyId == companyId);
 
             // Filter by action
             if (!string.IsNullOrEmpty(query.Action))
@@ -50,7 +50,7 @@ public class AuditLogController : ControllerBase
             {
                 var kw = query.Keyword.ToLower();
                 baseQuery = baseQuery.Where(a =>
-                    (a.Invoice != null && a.Invoice.InvoiceNumber != null && a.Invoice.InvoiceNumber.ToLower().Contains(kw)) ||
+                    (a.InvoiceNumber != null && a.InvoiceNumber.ToLower().Contains(kw)) ||
                     (a.UserEmail != null && a.UserEmail.ToLower().Contains(kw)) ||
                     (a.Reason != null && a.Reason.ToLower().Contains(kw)) ||
                     (a.Comment != null && a.Comment.ToLower().Contains(kw))
@@ -74,7 +74,7 @@ public class AuditLogController : ControllerBase
                 {
                     AuditId = a.AuditId,
                     InvoiceId = a.InvoiceId,
-                    InvoiceNumber = a.Invoice != null ? a.Invoice.InvoiceNumber : null,
+                    InvoiceNumber = a.InvoiceNumber,
                     UserEmail = a.UserEmail,
                     UserRole = a.UserRole,
                     UserFullName = a.User != null ? a.User.FullName : null,

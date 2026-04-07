@@ -16,6 +16,7 @@ using SmartInvoice.API.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Caching.Memory;
 using SmartInvoice.API.Enums;
 
 namespace SmartInvoice.API.Controller
@@ -34,6 +35,7 @@ namespace SmartInvoice.API.Controller
         private readonly ISqsService _sqsService;
         private readonly IConfiguration _configuration;
         private readonly ILogger<InvoicesController> _logger;
+        private readonly IMemoryCache _cache;
 
         [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
         public InvoicesController(
@@ -45,7 +47,8 @@ namespace SmartInvoice.API.Controller
             IAwsS3Service s3Service,
             ISqsService sqsService,
             IConfiguration configuration,
-            ILogger<InvoicesController> logger)
+            ILogger<InvoicesController> logger,
+            IMemoryCache cache)
         {
             _storageService = storageService;
             _invoiceProcessor = invoiceProcessor;
@@ -56,6 +59,7 @@ namespace SmartInvoice.API.Controller
             _sqsService = sqsService;
             _configuration = configuration;
             _logger = logger;
+            _cache = cache;
         }
 
         // ================================================
@@ -362,8 +366,8 @@ namespace SmartInvoice.API.Controller
         {
             try
             {
-                var (userId, companyId, userRole, _) = GetUserInfo();
-                var success = await _invoiceService.RestoreInvoiceAsync(id, companyId, userId, userRole);
+                var (userId, companyId, userRole, userEmail) = GetUserInfo();
+                var success = await _invoiceService.RestoreInvoiceAsync(id, companyId, userId, userEmail, userRole, GetClientIp());
                 if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
                 return Ok(new { Message = "Phục hồi thành công." });
             }
@@ -379,8 +383,8 @@ namespace SmartInvoice.API.Controller
         {
             try
             {
-                var (userId, companyId, userRole, _) = GetUserInfo();
-                var success = await _invoiceService.HardDeleteInvoiceAsync(id, companyId, userId, userRole);
+                var (userId, companyId, userRole, userEmail) = GetUserInfo();
+                var success = await _invoiceService.HardDeleteInvoiceAsync(id, companyId, userId, userEmail, userRole, GetClientIp());
                 if (!success) return NotFound(new { Message = "Không tìm thấy hóa đơn trong thùng rác hoặc không có quyền." });
                 return Ok(new { Message = "Xóa vĩnh viễn thành công. Đã hoàn trả dung lượng." });
             }
@@ -396,8 +400,8 @@ namespace SmartInvoice.API.Controller
         {
             try
             {
-                var (userId, companyId, userRole, _) = GetUserInfo();
-                var deletedCount = await _invoiceService.EmptyTrashAsync(companyId, userId, userRole);
+                var (userId, companyId, userRole, userEmail) = GetUserInfo();
+                var deletedCount = await _invoiceService.EmptyTrashAsync(companyId, userId, userEmail, userRole, GetClientIp());
                 return Ok(new { Message = $"Đã xóa vĩnh viễn {deletedCount} hóa đơn. Dung lượng đã được hoàn trả.", DeletedCount = deletedCount });
             }
             catch (Exception ex)
@@ -416,7 +420,14 @@ namespace SmartInvoice.API.Controller
                 var detail = await _invoiceService.GetInvoiceDetailAsync(id, companyId, userId, userRole);
 
                 if (detail == null)
+                {
+                    // Check if invoice was hard-deleted for a known reason (Merge or Fatal Error)
+                    if (_cache.TryGetValue($"OcrResult_{id}", out var cachedResult))
+                    {
+                        return StatusCode(410, cachedResult); // 410 Gone with specific reason
+                    }
                     return NotFound(new { Message = $"Không tìm thấy hóa đơn với ID: {id}" });
+                }
 
                 return Ok(detail);
             }
@@ -508,8 +519,8 @@ namespace SmartInvoice.API.Controller
         {
             try
             {
-                var (userId, companyId, userRole, _) = GetUserInfo();
-                var isDeleted = await _invoiceService.DeleteInvoiceAsync(id, companyId, userId, userRole);
+                var (userId, companyId, userRole, userEmail) = GetUserInfo();
+                var isDeleted = await _invoiceService.DeleteInvoiceAsync(id, companyId, userId, userEmail, userRole, GetClientIp());
 
                 if (!isDeleted)
                     return NotFound(new { Message = $"Không tìm thấy hóa đơn với ID: {id}" });

@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SmartInvoice.API.Data;
@@ -13,9 +14,11 @@ using SmartInvoice.API.Entities.JsonModels;
 namespace SmartInvoice.API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407152544_UpdateAuditLogSchemaForDeletion")]
+    partial class UpdateAuditLogSchemaForDeletion
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -639,17 +642,11 @@ namespace SmartInvoice.API.Migrations
                     b.Property<string>("Comment")
                         .HasColumnType("text");
 
-                    b.Property<Guid>("CompanyId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("InvoiceId")
                         .HasColumnType("uuid");
-
-                    b.Property<string>("InvoiceNumber")
-                        .HasColumnType("text");
 
                     b.Property<string>("IpAddress")
                         .HasMaxLength(50)
@@ -683,8 +680,6 @@ namespace SmartInvoice.API.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.HasKey("AuditId");
-
-                    b.HasIndex("CompanyId");
 
                     b.HasIndex("InvoiceId");
 
@@ -1636,12 +1631,6 @@ namespace SmartInvoice.API.Migrations
 
             modelBuilder.Entity("SmartInvoice.API.Entities.InvoiceAuditLog", b =>
                 {
-                    b.HasOne("SmartInvoice.API.Entities.Company", "Company")
-                        .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.HasOne("SmartInvoice.API.Entities.Invoice", "Invoice")
                         .WithMany("AuditLogs")
                         .HasForeignKey("InvoiceId")
@@ -1652,8 +1641,6 @@ namespace SmartInvoice.API.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("Company");
 
                     b.Navigation("Invoice");
 

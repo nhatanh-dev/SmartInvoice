@@ -13,7 +13,7 @@ public class AuditLogQueryDto
 public class SystemAuditLogDto
 {
     public Guid AuditId { get; set; }
-    public Guid InvoiceId { get; set; }
+    public Guid? InvoiceId { get; set; }
     public string? InvoiceNumber { get; set; }
 
     public string? UserEmail { get; set; }

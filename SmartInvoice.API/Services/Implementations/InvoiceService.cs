@@ -364,6 +364,8 @@ namespace SmartInvoice.API.Services.Implementations
                 {
                     AuditId = Guid.NewGuid(),
                     InvoiceId = id,
+                    InvoiceNumber = existingInvoice.InvoiceNumber,
+                    CompanyId = existingInvoice.CompanyId,
                     UserId = userId,
                     UserEmail = userEmail,
                     UserRole = userRole,
@@ -377,7 +379,7 @@ namespace SmartInvoice.API.Services.Implementations
             await _unitOfWork.CompleteAsync();
         }
 
-        public async Task<bool> DeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole)
+        public async Task<bool> DeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress)
         {
             var invoice = await _unitOfWork.Invoices.GetByIdAsync(id);
             if (invoice == null) return false;
@@ -390,6 +392,23 @@ namespace SmartInvoice.API.Services.Implementations
             invoice.DeletedAt = DateTime.UtcNow;
             
             _unitOfWork.Invoices.Update(invoice);
+
+            // Audit log
+            await _unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+            {
+                AuditId = Guid.NewGuid(),
+                InvoiceId = id,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
+                UserId = userId,
+                UserEmail = userEmail,
+                UserRole = userRole,
+                Action = "TRASH",
+                Comment = "Đã chuyển hóa đơn vào thùng rác.",
+                IpAddress = ipAddress,
+                CreatedAt = DateTime.UtcNow
+            });
+
             await _unitOfWork.CompleteAsync();
             return true;
         }
@@ -424,7 +443,7 @@ namespace SmartInvoice.API.Services.Implementations
             };
         }
 
-        public async Task<bool> RestoreInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole)
+        public async Task<bool> RestoreInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress)
         {
             var invoice = await _unitOfWork.Invoices.GetTrashInvoiceWithDetailsAsync(id);
             if (invoice == null || invoice.CompanyId != companyId) return false;
@@ -434,16 +453,49 @@ namespace SmartInvoice.API.Services.Implementations
             invoice.IsDeleted = false;
             invoice.DeletedAt = null;
             _unitOfWork.Invoices.Update(invoice);
+
+            // Audit log
+            await _unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+            {
+                AuditId = Guid.NewGuid(),
+                InvoiceId = id,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
+                UserId = userId,
+                UserEmail = userEmail,
+                UserRole = userRole,
+                Action = "RESTORE",
+                Comment = "Đã khôi phục hóa đơn từ thùng rác.",
+                IpAddress = ipAddress,
+                CreatedAt = DateTime.UtcNow
+            });
+
             await _unitOfWork.CompleteAsync();
             return true;
         }
 
-        public async Task<bool> HardDeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userRole)
+        public async Task<bool> HardDeleteInvoiceAsync(Guid id, Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress)
         {
             var invoice = await _unitOfWork.Invoices.GetTrashInvoiceWithDetailsAsync(id);
             if (invoice == null || invoice.CompanyId != companyId) return false;
             
             if (userRole == "Member" && invoice.Workflow?.UploadedBy != userId) return false;
+
+            // Audit log (Ghi TRƯỚC KHI XÓA InvoiceId để DB kịp map, sau đó DB sẽ set null)
+            await _unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+            {
+                AuditId = Guid.NewGuid(),
+                InvoiceId = id,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
+                UserId = userId,
+                UserEmail = userEmail,
+                UserRole = userRole,
+                Action = "HARD_DELETE",
+                Comment = $"Xóa vĩnh viễn hóa đơn Số: {invoice.InvoiceNumber}, Ký hiệu: {invoice.SerialNumber}. Đã giải phóng tệp tin.",
+                IpAddress = ipAddress,
+                CreatedAt = DateTime.UtcNow
+            });
 
             long totalDeletedSize = 0;
 
@@ -472,7 +524,7 @@ namespace SmartInvoice.API.Services.Implementations
             return true;
         }
 
-        public async Task<int> EmptyTrashAsync(Guid companyId, Guid userId, string userRole)
+        public async Task<int> EmptyTrashAsync(Guid companyId, Guid userId, string userEmail, string userRole, string? ipAddress)
         {
             // Lấy tất cả invoice đã xóa mềm của company (kể cả Draft)
             var allTrash = await _context.Invoices
@@ -527,6 +579,22 @@ namespace SmartInvoice.API.Services.Implementations
                 }
 
                 _unitOfWork.Invoices.Remove(invoice);
+
+                // Ghi nhận Audit Log cho từng hóa đơn bị xóa vĩnh viễn
+                await _unitOfWork.InvoiceAuditLogs.AddAsync(new InvoiceAuditLog
+                {
+                    AuditId = Guid.NewGuid(),
+                    InvoiceId = invoice.InvoiceId,
+                    InvoiceNumber = invoice.InvoiceNumber,
+                    CompanyId = companyId,
+                    UserId = userId,
+                    UserEmail = userEmail,
+                    UserRole = userRole,
+                    Action = "HARD_DELETE",
+                    Comment = $"Dọn dẹp thùng rác: Xóa vĩnh viễn hóa đơn Số: {invoice.InvoiceNumber}, Ký hiệu: {invoice.SerialNumber}.",
+                    IpAddress = ipAddress,
+                    CreatedAt = DateTime.UtcNow
+                });
             }
 
             if (totalReleasedSize > 0)
@@ -1497,12 +1565,14 @@ namespace SmartInvoice.API.Services.Implementations
                 });
 
                 // 6. Tạo Audit Log ghi nhận hành động Upload
-                var uploadUser = await _unitOfWork.Users.GetByIdAsync(UserId);
+                var uploadUser = await _unitOfWork.Users.GetByIdAsync(Guid.Parse(userId));
                 invoice.AuditLogs.Add(new InvoiceAuditLog
                 {
                     AuditId = Guid.NewGuid(),
                     InvoiceId = invoiceId,
-                    UserId = UserId,
+                    InvoiceNumber = invoice.InvoiceNumber,
+                    CompanyId = Guid.Parse(companyId),
+                    UserId = Guid.Parse(userId),
                     UserEmail = uploadUser?.Email,
                     UserRole = uploadUser?.Role,
                     Action = "UPLOAD",
@@ -1962,12 +2032,14 @@ namespace SmartInvoice.API.Services.Implementations
                 })
             });
 
-            var uploadUser = await _unitOfWork.Users.GetByIdAsync(UserId);
+            var uploadUser = await _unitOfWork.Users.GetByIdAsync(Guid.Parse(userId));
             invoice.AuditLogs.Add(new InvoiceAuditLog
             {
                 AuditId = Guid.NewGuid(),
                 InvoiceId = invoiceId,
-                UserId = UserId,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = Guid.Parse(companyId),
+                UserId = Guid.Parse(userId),
                 UserEmail = uploadUser?.Email,
                 UserRole = uploadUser?.Role,
                 Action = "UPLOAD_OCR",
