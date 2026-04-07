@@ -347,17 +347,21 @@ public class OcrWorkerService : BackgroundService
                         Comment = "Đã đính kèm bản thể hiện PDF/Ảnh (từ OCR Worker). Dữ liệu không thay đổi (giữ nguyên bản gốc XML)."
                     });
 
-                    // SOFT-DELETE the draft PDF invoice so frontend can still poll it.
-                    // Backend GetInvoiceDetailAsync will detect Notes.StartsWith("MERGED_INTO:")
-                    // and redirect the response to the target XML invoice.
-                    // Frontend detects merge by comparing returned invoiceId vs polled invoiceId.
+                    // HARD-DELETE the draft PDF invoice to avoid leaving duplicate traces in DB or Trash.
+                    // We append MERGED_FROM:{draftId} to the target XML invoice's notes so that
+                    // Backend GetInvoiceDetailAsync can discover the merge and redirect the polling request.
                     var draftInvoice = await unitOfWork.Invoices.GetByIdAsync(job.InvoiceId);
                     if (draftInvoice != null && draftInvoice.InvoiceId != targetInvoice.InvoiceId)
                     {
-                        draftInvoice.IsDeleted = true;
-                        draftInvoice.DeletedAt = DateTime.UtcNow;
-                        draftInvoice.Notes = $"MERGED_INTO:{targetInvoice.InvoiceId}";
-                        _logger.LogInformation("   🔗 Soft-deleted draft PDF invoice {DraftId} → redirects to XML invoice {TargetId}.",
+                        unitOfWork.Invoices.Remove(draftInvoice);
+                        
+                        var mergeTag = $"MERGED_FROM:{job.InvoiceId}";
+                        if (string.IsNullOrEmpty(targetInvoice.Notes))
+                            targetInvoice.Notes = mergeTag;
+                        else if (!targetInvoice.Notes.Contains(mergeTag))
+                            targetInvoice.Notes = $"{targetInvoice.Notes} | {mergeTag}";
+
+                        _logger.LogInformation("   🔗 Hard-deleted draft PDF invoice {DraftId}. Added redirect tag to target invoice {TargetId}.",
                             job.InvoiceId, targetInvoice.InvoiceId);
                     }
 

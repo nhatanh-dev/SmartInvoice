@@ -128,8 +128,9 @@ const BusinessValidationSummary: React.FC<BusinessValidationSummaryProps> = ({
 
   // Lọc ra các rules phù hợp theo luồng xử lý
   const activeRules = rules.filter((rule) => {
-    if (processingMethod === "OCR" && rule.label.includes("XSD")) {
-      return false; // Bỏ qua rule XSD nếu là luồng OCR
+    // OCR/API processing doesn't check XSD, so we hide it from the UI so it doesn't leave an empty checkmark.
+    if ((processingMethod === "OCR" || processingMethod === "API") && rule.label.includes("XSD")) {
+      return false; 
     }
     return true;
   });
