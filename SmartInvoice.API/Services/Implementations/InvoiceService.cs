@@ -690,6 +690,8 @@ namespace SmartInvoice.API.Services.Implementations
             {
                 AuditId = Guid.NewGuid(),
                 InvoiceId = invoiceId,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
                 UserId = userId,
                 UserEmail = userEmail,
                 UserRole = userRole,
@@ -750,6 +752,8 @@ namespace SmartInvoice.API.Services.Implementations
                     {
                         AuditId = Guid.NewGuid(),
                         InvoiceId = invoiceId,
+                        InvoiceNumber = invoice.InvoiceNumber,
+                        CompanyId = companyId,
                         UserId = userId,
                         UserEmail = userEmail,
                         UserRole = userRole,
@@ -873,6 +877,8 @@ namespace SmartInvoice.API.Services.Implementations
             {
                 AuditId = Guid.NewGuid(),
                 InvoiceId = invoiceId,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
                 UserId = userId,
                 UserEmail = userEmail,
                 UserRole = userRole,
@@ -932,6 +938,8 @@ namespace SmartInvoice.API.Services.Implementations
             {
                 AuditId = Guid.NewGuid(),
                 InvoiceId = invoiceId,
+                InvoiceNumber = invoice.InvoiceNumber,
+                CompanyId = companyId,
                 UserId = userId,
                 UserEmail = userEmail,
                 UserRole = userRole,
@@ -1374,6 +1382,8 @@ namespace SmartInvoice.API.Services.Implementations
                     {
                         AuditId = Guid.NewGuid(),
                         InvoiceId = existingInvoice.InvoiceId,
+                        InvoiceNumber = existingInvoice.InvoiceNumber,
+                        CompanyId = CompanyId,
                         UserId = UserId,
                         UserEmail = mergeUser?.Email,
                         UserRole = mergeUser?.Role,
@@ -1814,6 +1824,8 @@ namespace SmartInvoice.API.Services.Implementations
                 {
                     AuditId = Guid.NewGuid(),
                     InvoiceId = existingInvoice.InvoiceId,
+                    InvoiceNumber = existingInvoice.InvoiceNumber,
+                    CompanyId = CompanyId,
                     UserId = UserId,
                     UserEmail = mergeUser?.Email,
                     UserRole = mergeUser?.Role,
