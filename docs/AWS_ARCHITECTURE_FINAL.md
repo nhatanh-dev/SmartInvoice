@@ -638,6 +638,7 @@ graph LR
 
     subgraph GITHUB["GitHub Actions"]
         subgraph BACKEND_CI["Backend Pipeline"]
+            B0["✅ Unit Tests<br/>(xUnit + InMemory)"]
             B1["Build .NET 9<br/>Docker Image"]
             B2["Push to ECR<br/>(smartinvoice-backend)"]
             B3["Deploy to<br/>Elastic Beanstalk"]
@@ -660,7 +661,8 @@ graph LR
         AMP["Amplify App"]
     end
 
-    GIT --> B1 & O1 & F1
+    GIT --> B0 & O1 & F1
+    B0 -->|Pass| B1
     B1 --> B2 --> B3 --> EB_ENV
     O1 --> O2 --> O3 --> ECS_SVC
     F1 --> AMP
@@ -668,9 +670,15 @@ graph LR
     O2 --> ECR_OCR
 
     style GITHUB fill:#24292e,color:white
+    style B0 fill:#34a853,stroke:#2d8f47,color:white
 ```
 
-### GitHub Secrets cần thiết
+### 8.1. Đảm bảo chất lượng (Quality Assurance)
+*   **Unit Testing Layer**: Áp dụng bộ test tự động (48 test cases) bao phủ các logic phức tạp về tính toán Hạn ngạch (Quota), Xác thực (Auth) và xử lý Hóa đơn (Invoice).
+*   **Database Isolation**: Sử dụng `Microsoft.EntityFrameworkCore.InMemory` trong pipeline để giả lập database, giúp chạy test nhanh mà không cần khởi tạo RDS PostgreSQL thật.
+*   **Blocking Deployment**: Mọi lỗi logic phát hiện bởi Unit Test sẽ kích hoạt lệnh `exit 1`, ngăn chặn triệt để việc đẩy code lỗi lên ECR và Elastic Beanstalk.
+
+### 8.2. GitHub Secrets cần thiết
 
 | Secret | Giá trị |
 |--------|---------|

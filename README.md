@@ -7,6 +7,11 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </p>
 
+<p align="center">
+  <img src="https://github.com/tuankiet18-dev/SMARTINVOICE-SHIELD/actions/workflows/ci.yml/badge.svg" alt="Build and Test" />
+  <img src="https://github.com/tuankiet18-dev/SMARTINVOICE-SHIELD/actions/workflows/deploy-backend.yml/badge.svg" alt="Backend Deployment" />
+</p>
+
 <h1 align="center">🛡️ SmartInvoice Shield</h1>
 
 <p align="center">
@@ -28,7 +33,7 @@
 
 ## 📋 Overview
 
-**SmartInvoice Shield** is a multi-tenant SaaS platform designed for Vietnamese enterprises to automate the management of electronic invoices (e-invoices). The system leverages a **triple-engine AI/OCR pipeline** (Gemini Vision API, PaddleOCR, VietOCR) to extract invoice data from PDF/Image/XML files, performs automated **multi-tier tax risk assessment** based on General Department of Taxation (GDT) criteria, and provides a full invoice lifecycle management workflow — from upload to approval.
+**SmartInvoice Shield** is a multi-tenant SaaS platform designed for Vietnamese enterprises to automate the management of electronic invoices (e-invoices). The system leverages a **triple-engine AI/OCR pipeline** (Gemini Vision API, PaddleOCR, VietOCR) with **AI Confidence Scoring** to extract invoice data from PDF/Image/XML files, performs automated **tax risk assessment (Phase 1 - Qualitative Validation)** based on General Department of Taxation (GDT) criteria, and provides a full invoice lifecycle management workflow — from upload to approval.
 
 ### Who is it for?
 
@@ -46,16 +51,16 @@
 
 ### 🤖 AI-Powered Data Extraction (OCR)
 - **Triple-engine OCR pipeline**: Gemini Vision API → PaddleOCR → VietOCR with automatic fallback
+- **AI Confidence Scoring**: Evaluates extraction reliability to warn users of potential data mismatches
 - **Multi-format support**: PDF, PNG, JPG images and XML e-invoice files
 - **Batch upload**: Process multiple invoices simultaneously
 - **OCR review modal**: Side-by-side comparison of original image vs. extracted data
 - **Structured extraction**: Invoice number, date, seller/buyer tax codes, line items, VAT amounts
 
-### 📊 Multi-Tier Risk Assessment
-Risk scoring based on **Decision No. 78/QĐ-TCT** of the General Department of Taxation:
-- **Tier I — Qualitative Risk**: Cross-check tax codes against blacklisted/dissolved companies
-- **Tier II — Quantitative Risk (AI Scoring)**: Anomaly detection on invoice frequency, amounts vs. registered capital
-- **Tier III — Reference Risk**: Historical tax compliance data and third-party verification
+### 📊 Tax Risk Assessment Framework
+Risk scoring designed around **Decision No. 78/QĐ-TCT** of the General Department of Taxation. This MVP focuses on completing the foundational layer (Phase 1):
+- **Phase 1: Qualitative Risk (Deployed)**: Real-time cross-checking of tax codes against blacklisted/dissolved companies via VietQR API and internal blacklists.
+- **Phase 2 & Phase 3: Quantitative & Reference Risk (Future Scope)**: Anomaly detection on invoice frequency, amounts vs. registered capital, and compliance history mapping.
 
 Risk levels: 🟢 `Green` · 🟡 `Yellow` · 🟠 `Orange` · 🔴 `Red`
 
@@ -159,7 +164,8 @@ The system follows an **event-driven, microservice-oriented architecture** deplo
 | **Resilience** | Polly (Retry, Circuit Breaker, Timeout) |
 | **Export** | ClosedXML (Excel generation) |
 | **API Docs** | Swagger / Swashbuckle |
-| **Testing** | Bogus (seed data generation) |
+| **Testing** | xUnit, Moq, FluentAssertions, Bogus (data seed) |
+| **Test DB** | Entity Framework Core InMemory Provider |
 
 ### Frontend — `React + TypeScript`
 
@@ -253,6 +259,10 @@ SmartInvoice-Shield/
 │   ├── Program.cs                  # Application entry point & DI config
 │   ├── Dockerfile                  # Production Docker image
 │   └── Dockerfile.dev              # Development Docker image (hot-reload)
+│
+├── 📂 SmartInvoice.Tests/          # .NET 9 Unit Test Suite
+│   ├── Services/                   # Tests for Invoice, Auth, Quota services
+│   └── Helpers/                    # Test Factories & InMemory DB helpers
 │
 ├── 📂 SmartInvoice.Frontend/       # React TypeScript SPA
 │   ├── src/
@@ -527,18 +537,27 @@ The system uses **PostgreSQL 16** with **15 tables** managed via EF Core Code-Fi
 
 ## 🧪 Testing
 
-### Backend
+### Backend (Unit Tests)
+The backend uses a comprehensive test suite covering core business logic.
+- **Framework**: xUnit
+- **Mocking**: Moq
+- **Assertion**: FluentAssertions
+- **Isolation**: EF Core InMemory database for fast, isolated service testing.
+
 ```bash
-# Run from SmartInvoice.API directory
-dotnet test
+# Run all backend tests
+dotnet test SmartInvoice.Tests/SmartInvoice.Tests.csproj
 ```
 
-### Frontend
-```bash
-# Run from SmartInvoice.Frontend directory
-npm run test          # Single run (Vitest)
-npm run test:watch    # Watch mode
-```
+**Coverage Areas**:
+- `InvoiceService`: OCR processing flow, status transitions, batch operations.
+- `AuthService`: Registration, login, and Cognito integration logic.
+- `QuotaService`: Subscription management, usage limits, and credit consumption.
+
+---
+
+### CI/CD Quality Gate
+GitHub Actions is integrated to run all tests on every push. Deployment to AWS Elastic Beanstalk is **blocked** if any unit tests fail.
 
 ---
 
