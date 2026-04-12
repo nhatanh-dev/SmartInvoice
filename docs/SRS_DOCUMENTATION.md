@@ -136,6 +136,13 @@ Hệ thống sử dụng PostgreSQL với các bảng chính:
 ### 6.3. Tuân thủ pháp lý (Compliance)
 - Đáp ứng đầy đủ các tiêu chuẩn về lưu trữ và bảo quản hóa đơn điện tử theo **Circular 78/2021/TT-BTC**.
 
+### 6.4. Đảm bảo chất lượng (Quality Assurance)
+Hệ thống áp dụng quy trình kiểm thử tự động nghiêm ngặt để đảm bảo tính ổn định:
+- **Unit Testing**: Bắt buộc triển khai cho tất cả các Service cốt lõi (`InvoiceService`, `AuthService`, `QuotaService`). 
+- **Chỉ số bao phủ (Coverage)**: Mục tiêu bao phủ > 80% logic nghiệp vụ tại tầng Service.
+- **CI/CD Quality Gate**: Tích hợp GitHub Actions để tự động chạy bộ test mỗi khi có thay đổi code. Code chỉ được phép Merge hoặc Deploy khi toàn bộ các test case vượt qua (Pass).
+- **Môi trường Test**: Sử dụng `InMemory Database` để đảm bảo tốc độ thực hiện test nhanh và không phụ thuộc vào hạ tầng database bên ngoài.
+
 ---
 
 *Tài liệu này được soạn thảo bởi Antigravity AI Assistant.*

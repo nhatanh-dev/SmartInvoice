@@ -7,6 +7,11 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </p>
 
+<p align="center">
+  <img src="https://github.com/tuankiet18-dev/SMARTINVOICE-SHIELD/actions/workflows/ci.yml/badge.svg" alt="Build and Test" />
+  <img src="https://github.com/tuankiet18-dev/SMARTINVOICE-SHIELD/actions/workflows/deploy-backend.yml/badge.svg" alt="Backend Deployment" />
+</p>
+
 <h1 align="center">🛡️ SmartInvoice Shield</h1>
 
 <p align="center">
@@ -159,7 +164,8 @@ The system follows an **event-driven, microservice-oriented architecture** deplo
 | **Resilience** | Polly (Retry, Circuit Breaker, Timeout) |
 | **Export** | ClosedXML (Excel generation) |
 | **API Docs** | Swagger / Swashbuckle |
-| **Testing** | Bogus (seed data generation) |
+| **Testing** | xUnit, Moq, FluentAssertions, Bogus (data seed) |
+| **Test DB** | Entity Framework Core InMemory Provider |
 
 ### Frontend — `React + TypeScript`
 
@@ -253,6 +259,10 @@ SmartInvoice-Shield/
 │   ├── Program.cs                  # Application entry point & DI config
 │   ├── Dockerfile                  # Production Docker image
 │   └── Dockerfile.dev              # Development Docker image (hot-reload)
+│
+├── 📂 SmartInvoice.Tests/          # .NET 9 Unit Test Suite
+│   ├── Services/                   # Tests for Invoice, Auth, Quota services
+│   └── Helpers/                    # Test Factories & InMemory DB helpers
 │
 ├── 📂 SmartInvoice.Frontend/       # React TypeScript SPA
 │   ├── src/
@@ -527,18 +537,27 @@ The system uses **PostgreSQL 16** with **15 tables** managed via EF Core Code-Fi
 
 ## 🧪 Testing
 
-### Backend
+### Backend (Unit Tests)
+The backend uses a comprehensive test suite covering core business logic.
+- **Framework**: xUnit
+- **Mocking**: Moq
+- **Assertion**: FluentAssertions
+- **Isolation**: EF Core InMemory database for fast, isolated service testing.
+
 ```bash
-# Run from SmartInvoice.API directory
-dotnet test
+# Run all backend tests
+dotnet test SmartInvoice.Tests/SmartInvoice.Tests.csproj
 ```
 
-### Frontend
-```bash
-# Run from SmartInvoice.Frontend directory
-npm run test          # Single run (Vitest)
-npm run test:watch    # Watch mode
-```
+**Coverage Areas**:
+- `InvoiceService`: OCR processing flow, status transitions, batch operations.
+- `AuthService`: Registration, login, and Cognito integration logic.
+- `QuotaService`: Subscription management, usage limits, and credit consumption.
+
+---
+
+### CI/CD Quality Gate
+GitHub Actions is integrated to run all tests on every push. Deployment to AWS Elastic Beanstalk is **blocked** if any unit tests fail.
 
 ---
 

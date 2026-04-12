@@ -755,12 +755,19 @@ Vào Repo GitHub -> Settings -> Secrets and variables -> Actions, thêm:
 | `AWS_REGION` | `ap-southeast-1` |
 | `AWS_ACCOUNT_ID` | 12-digit Account ID |
 
-### 18.2. Kích hoạt Workflow
+### 18.2. Kích hoạt Workflow & Quality Gate
 
-Đẩy code lên branch `main`, GitHub Actions sẽ tự động:
+Đẩy code lên branch `main`, GitHub Actions sẽ tự động kích hoạt pipeline:
 
-1. Build Docker image Backend & OCR → Đẩy lên ECR.
-2. Cập nhật Elastic Beanstalk (Backend) & ECS Service (OCR).
+1.  **Phase 1: Build & Test (Mới)**:
+    *   Hệ thống tự động cài đặt .NET 9 và chạy bộ Unit Test cho các Service cốt lõi.
+    *   ⚠️ **Nếu có bất kỳ test nào thất bại**, toàn bộ quá trình deployment sẽ bị dừng lại ngay lập tức để bảo vệ môi trường Production.
+2.  **Phase 2: Package & Deploy**:
+    *   Sau khi Test Pass, hệ thống mới tiến hành Build Docker image Backend & OCR → Đẩy lên ECR.
+    *   Cập nhật Elastic Beanstalk (Backend) & ECS Service (OCR).
+
+> [!TIP]
+> Bạn có thể theo dõi trạng thái chạy test và deployment tại tab **Actions** trên GitHub.
 
 ---
 
