@@ -359,13 +359,13 @@ app.UseSwaggerUI();
 
 app.UseCors("AllowAmplify");
 
+app.MapGet("/health", () => Results.Ok("Healthy")).AllowAnonymous();
+
 app.UseMiddleware<MaintenanceMiddleware>();
 
 app.UseAuthentication();
 app.UseMiddleware<TenantStatusMiddleware>();
 app.UseAuthorization();
-
-app.MapGet("/health", () => Results.Ok("Healthy"));
 
 app.MapControllers();
 
