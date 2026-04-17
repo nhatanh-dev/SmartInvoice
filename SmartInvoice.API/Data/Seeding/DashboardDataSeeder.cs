@@ -10,8 +10,14 @@ public static class DashboardDataSeeder
     public static async Task SeedInvoicesAsync(AppDbContext context, int amountToSeed = 1000)
     {
         // 1. Fetch required linked entities to avoid FK constraint errors
-        var companies = await context.Companies.ToListAsync();
-        var users = await context.Users.ToListAsync();
+        var companies = await context.Companies
+            .Where(c => c.CompanyName != "System Administration")
+            .ToListAsync();
+            
+        var validCompanyIds = companies.Select(c => c.CompanyId).ToList();
+        var users = await context.Users
+            .Where(u => validCompanyIds.Contains(u.CompanyId))
+            .ToListAsync();
         
         // Let's assume you might not have DocumentTypes, fallback to handle it:
         // Adjust if your db has DocumentTypes mapped
@@ -19,7 +25,7 @@ public static class DashboardDataSeeder
 
         if (companies.Count == 0 || users.Count == 0)
         {
-            throw new Exception("Please ensure you have at least 1 Company and 1 User in your database before seeding Invoices.");
+            throw new Exception("Please ensure you have at least 1 Company (excluding System Administration) and 1 User in your database before seeding Invoices.");
         }
 
         // Set Vietnamese locale for realistic names and addresses
@@ -137,10 +143,16 @@ public static class DashboardDataSeeder
             })
             
             // Workflow linkage
-            .RuleFor(i => i.Workflow, (f, i) => new InvoiceWorkflow
+            .RuleFor(i => i.Workflow, (f, i) => 
             {
-                UploadedBy = f.PickRandom(users).Id,
-                CurrentApprovalStep = i.Status == "Approved" ? 3 : 1
+                var companyUsers = users.Where(u => u.CompanyId == i.CompanyId).ToList();
+                var uploaderId = companyUsers.Any() ? f.PickRandom(companyUsers).Id : f.PickRandom(users).Id;
+                
+                return new InvoiceWorkflow
+                {
+                    UploadedBy = uploaderId,
+                    CurrentApprovalStep = i.Status == "Approved" ? 3 : 1
+                };
             })
             .RuleFor(i => i.CreatedAt, (f, i) => i.InvoiceDate.ToUniversalTime())
             .RuleFor(i => i.UpdatedAt, (f, i) => i.InvoiceDate.AddDays(f.Random.Int(0, 5)).ToUniversalTime());
